@@ -5,7 +5,7 @@
 
 import plnn
 import pre_activation_bounds as pab
-from domains import Hyperbox
+from hyperbox import Hyperbox
 import numpy as np 
 import torch 
 import utilities as utils
@@ -38,7 +38,7 @@ def test_2layer_naive_ia_bounds(num_test_points=1000):
     global_hi = 1.0
 
     simple_box = Hyperbox.build_linf_ball(center, radius, global_lo, global_hi)
-    bound_obj = pab.PreactivationBounds.from_hyperbox(network, simple_box)
+    bound_obj = pab.PreactivationBounds.naive_ia_from_hyperbox(network, simple_box)
     x = torch.rand(num_test_points, 10) * 2 - 1
     verify_ia(x, bound_obj)
 
@@ -50,7 +50,7 @@ def test_5layer_naive_ia_bounds(num_test_points=1000):
     global_lo = 0.2
     global_hi = 1.0
     simple_box = Hyperbox.build_linf_ball(center, radius, global_lo, global_hi)
-    bound_obj = pab.PreactivationBounds.from_hyperbox(network, simple_box)
+    bound_obj = pab.PreactivationBounds.naive_ia_from_hyperbox(network, simple_box)
     x = torch.rand(num_test_points, 128).clamp(0.2, 1.0)
     verify_ia(x, bound_obj)
 
@@ -84,7 +84,7 @@ def test_2layer_backprop_bounds(num_test_points=1000):
     global_hi = 1.0
     simple_box = Hyperbox.build_linf_ball(center, radius, global_lo, global_hi)
 
-    preact_bounds = pab.PreactivationBounds.from_hyperbox(network, simple_box)
+    preact_bounds = pab.PreactivationBounds.naive_ia_from_hyperbox(network, simple_box)
     c_vec = np.array([1.0, -1.0])
     c_tens = torch.Tensor(c_vec)
     preact_bounds.backprop_bounds(c_vec)
@@ -100,7 +100,7 @@ def test_5layer_backprop_bounds(num_test_points=1000):
     global_lo = 0.2
     global_hi = 1.0
     simple_box = Hyperbox.build_linf_ball(center, radius, global_lo, global_hi)
-    preact_bounds = pab.PreactivationBounds.from_hyperbox(network, simple_box)
+    preact_bounds = pab.PreactivationBounds.naive_ia_from_hyperbox(network, simple_box)
     x = torch.rand(num_test_points, 128).clamp(0.2, 1.0)
     c_vec = np.array([3.0, -1.0, 2.0, -4.0])
     c_tens = torch.Tensor(c_vec)

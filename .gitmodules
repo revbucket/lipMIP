@@ -1,0 +1,3 @@
+[submodule "geometric-certificates"]
+	path = geometric-certificates
+	url = https://github.com/revbucket/geometric-certificates

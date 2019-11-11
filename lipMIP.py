@@ -3,7 +3,7 @@
 import numpy as np
 import gurobipy as gb
 import utils
-from domains import Hyperbox
+from hyperbox import Hyperbox
 
 """
 

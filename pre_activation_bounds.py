@@ -1,7 +1,7 @@
 """ Techniques to compute preactivation bounds for piecewise linear nets"""
 
 from plnn import PLNN
-from domains import Hyperbox
+from hyperbox import Hyperbox
 import utilities as utils
 import torch
 import numpy as np
