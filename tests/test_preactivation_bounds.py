@@ -3,7 +3,7 @@
     but will hopefully fail if there's a bug involved 
 """
 
-import plnn
+from relu_nets import ReLUNet
 import pre_activation_bounds as pab
 from hyperbox import Hyperbox
 import numpy as np 
@@ -31,7 +31,7 @@ def verify_ia(x, bound_obj):
 
 # Simple test function
 def test_2layer_naive_ia_bounds(num_test_points=1000):
-    network = plnn.PLNN(layer_sizes=[10, 100, 10], bias=True)
+    network = ReLUNet(layer_sizes=[10, 100, 10], bias=True)
     center = np.zeros(10)
     radius = 1.0
     global_lo = -1.0
@@ -44,7 +44,7 @@ def test_2layer_naive_ia_bounds(num_test_points=1000):
 
 # More complicated test
 def test_5layer_naive_ia_bounds(num_test_points=1000):
-    network = plnn.PLNN(layer_sizes=[128, 256, 512, 128, 64, 32, 16], bias=True)
+    network = ReLUNet(layer_sizes=[128, 256, 512, 128, 64, 32, 16], bias=True)
     center = np.ones(128) * 0.5
     radius = 1.0
     global_lo = 0.2
@@ -77,7 +77,7 @@ def verify_gradient_bounds(num_test_points, bound_obj, c_tens):
 
 def test_2layer_backprop_bounds(num_test_points=1000):
     torch.random.manual_seed(42069)
-    network = plnn.PLNN(layer_sizes=[2, 10, 2], bias=True)
+    network = ReLUNet(layer_sizes=[2, 10, 2], bias=True)
     center = np.zeros(2)
     radius = 1.0
     global_lo = -1.0
@@ -94,7 +94,7 @@ def test_2layer_backprop_bounds(num_test_points=1000):
 
 def test_5layer_backprop_bounds(num_test_points=1000):
     torch.random.manual_seed(42069)    
-    network = plnn.PLNN(layer_sizes=[128, 256, 512, 128, 64, 32, 4], bias=True)
+    network = ReLUNet(layer_sizes=[128, 256, 512, 128, 64, 32, 4], bias=True)
     center = np.ones(128) * 0.5
     radius = 1.0
     global_lo = 0.2

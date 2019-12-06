@@ -1,3 +1,8 @@
+################### PERSONAL GITIGNORE ##################
+scratch/
+
+
+####################### DEFAULT GITIGNORE ############################
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

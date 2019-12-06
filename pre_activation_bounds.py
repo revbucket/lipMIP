@@ -1,6 +1,6 @@
 """ Techniques to compute preactivation bounds for piecewise linear nets"""
 
-from plnn import PLNN
+from relu_nets import ReLUNet
 from hyperbox import Hyperbox
 import utilities as utils
 import torch
@@ -26,6 +26,7 @@ class PreactivationBounds(object):
         self.backprop_lows = {}
         self.backprop_highs = {}
         self.backprop_vector = None
+        
 
     def add_ith_layer_bounds(self, i, lows, highs):
         """ Adds the bounds as a [n_neurons, 2] numpy array """
@@ -208,7 +209,7 @@ def naive_interval_analysis(network, domain):
         implemented using equation (6) from
         https://arxiv.org/pdf/1810.12715.pdf
     ARGS:
-        network : PLNN object - network we're building bounds for
+        network : ReLUNet object - network we're building bounds for
         domain: Hyperbox object - bounds on the input we allow
     RETURNS:
         PreactivationBounds object which holds the values we care
@@ -226,6 +227,9 @@ def naive_interval_analysis(network, domain):
         prev_highs = new_midpoint + new_radius
         preact_object.add_ith_layer_bounds(layer_no, prev_lows, prev_highs)
     return preact_object
+
+
+
 
 
 def improved_interval_analysis(network, domain):

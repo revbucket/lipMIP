@@ -6,6 +6,24 @@ import numpy as np
 import numbers
 import utilities as utils
 
+
+class LinfBallFactory(object):
+    """ Class to easily generate l_inf balls with fixed radius and global bounds
+        (but no center)
+    """
+    def __init__(self, dimension, radius, global_lo=None, global_hi=None):
+        self.dimension = dimension
+        self.radius = radius
+        self.global_lo = global_lo
+        self.global_hi = global_hi
+
+    def make_linf_ball(center):
+        return Hyperbox.build_linf_ball(center, self.radius, 
+                                        global_lo=self.global_lo,
+                                        global_hi=self.global_hi)
+
+
+
 class Hyperbox(object):
     def __init__(self, dimension):
         self.dimension = dimension
@@ -39,6 +57,9 @@ class Hyperbox(object):
     # =           Forward facing methods                           =
     # ==============================================================
 
+    @classmethod
+    def build_unit_hypercube(cls, dim):
+        return cls.build_linf_ball(np.ones(dim) * 0.5, 0.5)
 
     @classmethod
     def build_linf_ball(cls, x, radius, global_lo=None, global_hi=None):

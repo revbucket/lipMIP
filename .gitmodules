@@ -1,3 +1,6 @@
 [submodule "geometric-certificates"]
 	path = geometric-certificates
 	url = https://github.com/revbucket/geometric-certificates
+[submodule "other_methods/LipSDP"]
+	path = other_methods/LipSDP
+	url = https://github.com/arobey1/LipSDP
