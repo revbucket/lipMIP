@@ -1,63 +1,83 @@
-""" File to hold training techniques for 
-	-- general purpose training 
-	-- adversarial training 
-	-- helpful training techniques for ablation tests 
+""" File to hold training techniques for
+	-- general purpose training
+	-- adversarial training
+	-- helpful training techniques for ablation tests
 """
-import torch 
-import torch.nn as nn 
-import torch.optim as optim 
+import torch
+import torch.nn as nn
+import torch.optim as optim
 import torch.nn.functional as F
 import torch.autograd as autograd
 
 import pickle
 from abc import ABC, abstractmethod
+import os
+import sys
+sys.path.append(os.path.join(os.getcwd(),'..'))
 
+from utilities import ParameterObject
 
 # ===========================================================================
 # =           General purpose training                                      =
 # ===========================================================================
 
-
-def training_loop(network, trainset, valset, num_epochs, optimizer=None, 
-				  loss_functional=None, test_after_epoch=True):
-	""" Trains a network over the trainset with given loss and optimizer 
-	ARGS:
-		network: nn.module to be trained 
-		trainset: torch.utils.data.DataLoader object of the training data 
-		valset: torch.utils.data.DataLoader object of the validation data 
-		optimizer: None or torch.optim object - if None will be 
+class TrainParameters(ParameterObject):
+	def __init__(self, trainset, valset, num_epochs, optimizer=None,
+				 loss_functional=None, test_after_epoch=True):
+		"""
+		ARGS:
+		trainset: torch.utils.data.DataLoader object of the training data
+		valset: torch.utils.data.DataLoader object of the validation data
+		optimizer: None or torch.optim object - if None will be
 				   initialized to optim.Adam object with default parameters
-		loss_function: None or loss object - if None will default to 
+		loss_function: None or loss object - if None will default to
 					   crossEntropyLoss (see LossObject at bottom of this )
-		test_after_epoch: bool - if True, we test top1 accuracy after each 
-								 epoch 
+		test_after_epoch: bool - if True, we test top1 accuracy after each
+								 epoch
+		"""
+
+		init_args = {k: v for k, v in locals() if k != 'self'}
+		super(LipParameters, self).__init__(**init_args)
+
+
+
+
+def training_loop(network, train_params, epoch_start_no=0):
+	""" Trains a network over the trainset with given loss and optimizer
+	ARGS:
+		network: ReLUNet - network to train
+		train_params: TrainParameters - parameters object governing training
+		epoch_start_no: int - number to start epochs at for print purposes
 	RETURNS:
-		None, but modifies network parameters 
+		None, but modifies network parameters
 	"""
+	# Unpack the parameter object
+	for attr in train_params.attr_list:
+		eval('%s = train_params.%s' % (attr, attr))
 
 	if optimizer is None:
 		optimizer = optim.Adam(network.parameters(), lr=0.001, weight_decay=0)
 	if loss_functional is None:
-		loss_functional = LossFunctional(network, 
+		loss_functional = LossFunctional(network,
  										 regularizers=[XEntropyReg(network)])
 
 	for epoch_no in range(num_epochs):
 		for examples, labels in trainset:
-			optimizer.zero_grad()			
-			loss = loss_functional(examples, labels)			
-			loss.backward() 
-			optimizer.step() 
+			optimizer.zero_grad()
+			loss = loss_functional(examples, labels)
+			loss.backward()
+			optimizer.step()
 		if test_after_epoch:
 			test_acc = test_validation(network, valset)
 			test_acc_str = '| Accuracy: %.02f' % (test_acc * 100)
-		else: 
+		else:
 			test_acc_str = ''
-		print(("Epoch %02d " % epoch_no) + test_acc_str)
+		print(("Epoch %02d " % (epoch_no + epoch_start_no)) + test_acc_str)
 
 
 def test_validation(network, valset, loss_functional=None):
-	""" Report the top1 accuracy of network over the 
-		if loss_functional is None: 
+	""" Report the top1 accuracy of network over the
+		if loss_functional is None:
 			Returns top1 accuracy in range [0.0, 1.0]
 		else:
 			Returns average loss value over valset
@@ -74,13 +94,13 @@ def test_validation(network, valset, loss_functional=None):
 	return float(count_value) / total
 
 
-def train_cacher(saved_name, network=None, trainset=None, valset=None, num_epochs=None, 
+def train_cacher(saved_name, network=None, trainset=None, valset=None, num_epochs=None,
 				 loss_functional=None, test_after_epoch=True):
-	""" Convenient helper function to try and load a neural_net with a 
+	""" Convenient helper function to try and load a neural_net with a
 		given name, and if this doesn't exist, train one with the specified params
 		and then save it
 	ARGS:
-		saved_name: (str) if not None, must end with .pkl - is the name of the 
+		saved_name: (str) if not None, must end with .pkl - is the name of the
 					pickled object
 
 	RETURNS:
@@ -93,7 +113,7 @@ def train_cacher(saved_name, network=None, trainset=None, valset=None, num_epoch
 		return trained_net
 	except:
 		print("Training network: " + saved_name)
-		training_loop(network, trainset, valset, num_epochs, 
+		training_loop(network, trainset, valset, num_epochs,
    					  loss_functional=loss_functional,
 					  test_after_epoch=test_after_epoch)
 		save_file = open(saved_name, 'wb')
@@ -107,36 +127,36 @@ def train_cacher(saved_name, network=None, trainset=None, valset=None, num_epoch
 
 
 class LossFunctional:
-	""" Main class to be used as a loss-object. Composed of many 
+	""" Main class to be used as a loss-object. Composed of many
 		Regularizer objects which return scalar loss values.
 		self.forward(...) returns the weighted sum of the regularizers
-	"""	
-	def __init__(self, network, regularizers=None):	
+	"""
+	def __init__(self, network, regularizers=None):
 		self.network = network
 		if regularizers is None:
 			regularizers = []
-		self.regularizers = regularizers 
+		self.regularizers = regularizers
 
 	def __repr__(self):
 		if len(self.regularizers) == 0:
 			return '<Empty Loss Functional>'
 		regs_reprs = [_.__repr__() + ',' for _ in self.regularizers]
 		output_str = '<LossFunctional: [\n' + '\n'.join(regs_reprs) + '\n]>'
-		return output_str		
+		return output_str
 
 	def __call__(self, examples, labels):
-		return self.forward(examples, labels)		
+		return self.forward(examples, labels)
 
 
 	def forward(self, examples, labels):
 		# naively:
-		# return sum([reg.forward(examples, labels) 
+		# return sum([reg.forward(examples, labels)
 		#             for reg in self.regularizers])
 
-		# slightly more cleverly:		
+		# slightly more cleverly:
 		if any(reg.requires_ff for reg in self.regularizers):
 			outputs = self.network(examples)
-			losses = sum([reg.forward(examples, labels, outputs=outputs) 
+			losses = sum([reg.forward(examples, labels, outputs=outputs)
 						 for reg in self.regularizers])
 
 		losses = [reg.forward(examples, labels) for reg in self.regularizers]
@@ -149,7 +169,7 @@ class LossFunctional:
 
 class Regularizer(ABC):
 	def __init__(self, scalar=1.0):
-		self.scalar = scalar 
+		self.scalar = scalar
 		self.requires_ff = None
 		pass
 
@@ -159,7 +179,7 @@ class Regularizer(ABC):
 
 
 class XEntropyReg(Regularizer):
-	def __init__(self, network, scalar=1.0):		
+	def __init__(self, network, scalar=1.0):
 		super(XEntropyReg, self).__init__(scalar)
 		self.network = network
 		self.requires_ff = True
@@ -177,8 +197,8 @@ class L1WeightReg(Regularizer):
 	def __init__(self, network, scalar=1.0):
 		super(L1WeightReg, self).__init__(scalar)
 
-		self.network = network 
-		self.requires_ff = False 
+		self.network = network
+		self.requires_ff = False
 
 	def __repr__(self):
 		return 'L1Reg: (scalar: %.02e)' % self.scalar
@@ -191,11 +211,11 @@ class L1WeightReg(Regularizer):
 
 class ReluStability(Regularizer):
 
-	def __init__(self, network, scalar=1.0, l_inf_radius=None, 
+	def __init__(self, network, scalar=1.0, l_inf_radius=None,
 				 global_lo=None, global_hi=None):
 		super(ReluStability, self).__init__(scalar)
 
-		self.network = network 
+		self.network = network
 		self.requires_ff = False
 		self.l_inf_radius = l_inf_radius
 		self.global_lo = global_lo
@@ -206,7 +226,7 @@ class ReluStability(Regularizer):
 			   (self.scalar, self.l_inf_radius)
 
 	def forward(self, examples, labels, outputs=None):
-		# First compute naive IA 
+		# First compute naive IA
 		naive_ia_bounds = self._naive_ia(examples)
 
 		# And then compute element-wise relu-stability losses
@@ -216,19 +236,19 @@ class ReluStability(Regularizer):
 
 
 	def _naive_ia(self, examples):
-	    """ Useful for ReLU stability -- computes naive interval analysis for an 
+	    """ Useful for ReLU stability -- computes naive interval analysis for an
 	        entire batch of examples
 	    ARGS:
-	        examples: Tensor (N, C, H, W) - examples for upper/lower bounds we compute 
+	        examples: Tensor (N, C, H, W) - examples for upper/lower bounds we compute
 	    RETURNS:
-	        bounds : tensor[], which is a list of length #hiddenLayers, where each 
+	        bounds : tensor[], which is a list of length #hiddenLayers, where each
 	                 element is a (N, #HiddenUnits, 2) tensor
 	    """
 	    N = examples.shape[0]
 	    reshaped_ex = examples.view(N, -1)
 	    preact_bounds = []
 	    postact_bounds = []
-	    layer_0 = torch.stack([reshaped_ex -self.l_inf_radius, 
+	    layer_0 = torch.stack([reshaped_ex -self.l_inf_radius,
 	                           reshaped_ex + self.l_inf_radius], dim=-1)
 	    if (self.global_lo is not None) or (self.global_hi is not None):
 	    	layer_0 = torch.clamp(layer_0, self.global_lo, self.global_hi)
@@ -245,8 +265,8 @@ class ReluStability(Regularizer):
 
 	        new_mids = fc.forward(input_mids)
 	        new_range = input_range.matmul(fc.weight.abs().t())
-	        preact_lows = new_mids - new_range 
-	        preact_highs = new_mids + new_range 
+	        preact_lows = new_mids - new_range
+	        preact_highs = new_mids + new_range
 	        preact_bounds.append(torch.stack([preact_lows, preact_highs], dim=-1))
 	        postact_bounds.append(F.relu(preact_bounds[-1]))
 
@@ -255,10 +275,10 @@ class ReluStability(Regularizer):
 
 
 class LipschitzReg(Regularizer):
-	""" Lipschitz regularization taken from this paper: 
+	""" Lipschitz regularization taken from this paper:
 		https://arxiv.org/pdf/1808.09540.pdf
-		--- computes either the batchwise average or max gradient 
-		    norm depending on the tv_or_max parameter. 
+		--- computes either the batchwise average or max gradient
+		    norm depending on the tv_or_max parameter.
 		    (loss is standard CrossEntropyLoss )
 	"""
 	def __init__(self, network, scalar=1.0, tv_or_max='tv', lp_norm=1):
@@ -277,7 +297,7 @@ class LipschitzReg(Regularizer):
 				 (prefix, self.scalar, self.lp_norm)
 
 	def forward(self, examples, labels, outputs=None):
-		# copy the examples to enforce gradients 
+		# copy the examples to enforce gradients
 		N = examples.shape[0]
 		new_ex = self.network.tensorfy_clone(examples, requires_grad=True)
 		outputs = self.network(new_ex)
@@ -295,20 +315,20 @@ class LipschitzReg(Regularizer):
 class GradientStability(ReluStability):
 	def __init__(self, network, scalar=1.0, l_inf_radius=None,
 				 global_lo=None, global_hi=None, c_vector=None):
-	super(GradientStability, self).__init__(network, scalar, l_inf_radius,
-											global_lo=None, global_hi=None)
-	self.c_vector = c_vector
+		super(GradientStability, self).__init__(network, scalar, l_inf_radius,
+												global_lo=None, global_hi=None)
+		self.c_vector = c_vector
 
 	def __repr__(self):
 		return 'ReluStability: (scalar: %.02e), (radius: %.02f)' %\
-			   (self.scalar, self.l_inf_radius)	
+			   (self.scalar, self.l_inf_radius)
 
 	def forward(self, examples, labels, outputs=None):
-		# First compute gradient upper/lower bounds 
+		# First compute gradient upper/lower bounds
 		stability_relus = self._stable_relus(examples)
 		grad_bounds = self._batch_fast_lip(stability_relus)
 
-		# Then compute element-wise stability costs 
+		# Then compute element-wise stability costs
 		element_muls = grad_bounds[:,0,:] * grad_bounds[:,1,:]
 
 		element_rs = -torch.tanh(1.0 + element_muls).sum()
@@ -317,19 +337,19 @@ class GradientStability(ReluStability):
 
 	def _stable_relus(self, examples):
 		""" Generates stable/unstable relus for the set of examples
-		ARGS: 
-			examples: tensor (N,C,H,W) - tensor of images representing minibatch 
+		ARGS:
+			examples: tensor (N,C,H,W) - tensor of images representing minibatch
 		RETURNS:
-			stability_relus: tensor[] - where the i'th element is a tensor 
-							 with shape (N, #Neurons) and elements are integers in 
+			stability_relus: tensor[] - where the i'th element is a tensor
+							 with shape (N, #Neurons) and elements are integers in
 							 {-1, 0, 1} for -1 meaning always off, +1 meaning always on
-							 and 0 for unstable 
+							 and 0 for unstable
 		"""
 		ia_bounds = self._naive_ia(examples)
 
 		stability_relus = []
 		for ia_bound in ia_bounds:
-			layer_stability = torch.zeros_like(ia_bound[:,:,0]).long() 
+			layer_stability = torch.zeros_like(ia_bound[:,:,0]).long()
 			layer_stability += (ia_bound[:,:,0] > 0).long()
 			layer_stability -= (ia_bound[:,:,1] < 0).long()
 			stability_relus.append(layer_stability)
@@ -337,14 +357,14 @@ class GradientStability(ReluStability):
 
 
 	def _batch_fast_lip(self, stability_relus):
-		""" Performs tensor version of fast-lip using stability_relus 
+		""" Performs tensor version of fast-lip using stability_relus
 		ARGS:
 			stability_relus: see output of self._stable_relus(...)
 		RETURNS:
 		"""
 		N = stability_relus[0].shape[0]
 		if self.c_vector is not None:
-			num_outputs = 1 
+			num_outputs = 1
 			matrix_or_vec = 'vec'
 		else:
 			num_outputs = self.network.fcs[-1].out_features
@@ -357,7 +377,7 @@ class GradientStability(ReluStability):
 		# --- loop for all but the last FC layer
 		loop_iter = enumerate(zip(stability_list[::-1], self.network.fcs[:1:-1]))
 		for i, (relu_stability, fc_layer) in loop_iter:
-			# --- Handle the linear layer 
+			# --- Handle the linear layer
 			weight = fc_layer.weight
 			if i == 1:
 				if self.c_vector is not None:
@@ -366,11 +386,11 @@ class GradientStability(ReluStability):
 				pre_act = weight.unsqueeze(0).unsqueeze(0)\
 							    .expand((N, 2) + weight.shape)
 			else:
-				# interval analysis 
-				pre_act = ia_mm(weight.t(), post_acts[-1], 1, 
+				# interval analysis
+				pre_act = ia_mm(weight.t(), post_acts[-1], 1,
 								matrix_or_vec=matrix_or_vec)
 
-			# --- Handle the ReLU 
+			# --- Handle the ReLU
 			# relu_stability has shape (N, # neurons)
 			# pre_act has shape (N, 2, #neurons, # outputs)
 			off_neurons = (relu_stability < 0).unsqueeze(1)
@@ -386,6 +406,6 @@ class GradientStability(ReluStability):
 			pre_act[uncertain_mask] = 0.0
 			post_acts.append(pre_act)
 
-		# --- now handle the final (first) FC layer 
+		# --- now handle the final (first) FC layer
 		weight = self.network.fcs[0].weight
 		return ia_mm(weight.t(), post_acts[-1], 1, matrix_or_vec=matrix_or_vec)

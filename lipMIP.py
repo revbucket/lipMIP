@@ -7,11 +7,12 @@ from hyperbox import Hyperbox, LinfBallFactory
 from pre_activation_bounds import PreactivationBounds
 import time
 import pprint
+
 """
 
    Lipschitz Maximization as a mixed-integer-program
 
-   Ultimately we'll want to maximize ||grad(f)|| over
+   Ultimately we'll want to maximize ||grad(f)||_1 over
    either the entire domain or some specified input domain
 
    We'll do this in three steps:
@@ -32,15 +33,23 @@ import pprint
 # =           MAIN SOLVER BLOCK                         =
 # =======================================================
 
-def compute_max_lipschitz(network, domain, l_p, c_vector,
-						  preact_method='ia', verbose=False,
-						  timeout=None):
+class LipParameters(utils.ParameterObject):
+	def __init__(self, domain, l_p, c_vector, preact_method='ia',
+				 verbose=False, timeout=None):
+		init_args = {k: v for k, v in locals() if k != 'self'}
+		super(LipParameters, self).__init__(**init_args)
+
+
+def compute_max_lipschitz(network, lip_params):
 	""" Computes the maximum lipschitz constant with a fixed
 		domain already set.
 
 		Returns the maximum lipschitz constant and the point that
 		attains it
 	"""
+	for attr in lip_params.attr_list:
+		eval('%s = train_params.%s' % (attr, attr))
+
 	assert l_p == 'l_inf' # Meaning we want max ||grad(f)||_1
 	assert preact_method  in ['ia'] # add full_lp later
 
@@ -112,6 +121,35 @@ class LipMIPResult:
 		"""
 		for del_el in (ATTRS - MIN_ATTRS):
 			delattr(self, del_el)
+
+
+class EvaluationParameters(utils.ParameterObject):
+	def __init__(self, hypercube_kwargs=None, radius_kwargs=None,
+				 data_eval_kwargs=None, num_random_eval_kwargs=None,
+				 max_lipschitz_kwargs=None):
+	""" Stores parameters for evaluation objects """
+		super(EvaluationParameters, self).__init__(**kwargs)
+
+	def __call__(self, network, c_vector, data_iter=None):
+
+		eval_obj = LipMIPEvaluation(network, c_vector)
+		# Set up eval objects for each case of evaluation
+		
+		# Random evaluations
+		if num_random_eval is not None:
+			eval_obj.do_random_evals()
+
+		# Hypercube evaluation
+
+
+		# Large radius evaluation 
+
+
+		# Data evaluation
+
+
+
+		return 
 
 
 class LipMIPEvaluation:
@@ -213,7 +251,7 @@ class LipMIPEvaluation:
 				result.attach_label(label)
 			self.data_eval.append(result)
 
-	
+
 
 
 # ==============================================================

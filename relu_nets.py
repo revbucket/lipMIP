@@ -85,7 +85,7 @@ class ReLUNet(nn.Module):
 
 
 
-    def random_max_grad(self, hyperbox, c_vector, num_random):
+    def random_max_grad(self, hyperbox, c_vector, num_random, pnorm=1):
         """ Takes a bunch of random points within the hyperbox and 
             computes the gradient magnitude at each. Records the 
             maximum normed gradient (and point)
@@ -93,6 +93,7 @@ class ReLUNet(nn.Module):
             hyperbox: HyperBox object
             c_vector: tensor [OUTPUT_DIM]
             num_random : int - number of random points 
+            pnorm : int, float - Lp norm to take of gradients
         RETURNS:
             {norm, point, grad} that maximizes grad norm 
         """
@@ -102,7 +103,7 @@ class ReLUNet(nn.Module):
         for i in range(num_random):
             random_input = hyperbox.random_point(tensor_or_np='tensor')
             grad = self.get_grad_at_point(random_input, c_vector)
-            grad_norm = grad.norm(p=1)
+            grad_norm = grad.norm(p=pnorm)
             if grad_norm > max_norm:
                 max_norm = grad_norm
                 max_point = random_input

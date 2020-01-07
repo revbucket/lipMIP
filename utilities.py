@@ -13,6 +13,12 @@ import tempfile
 # =           Helpful all-purpose functions                                     =
 # ===============================================================================
 
+class ParameterObject:
+	def __init__(self, other, **kwargs):
+		other.attr_list = [] 
+		for k, v in kwargs.items():
+			setattr(other, k, v)
+			other.attr_list.append(k)
 
 
 def as_numpy(tensor_or_array):
