@@ -11,13 +11,12 @@ from pre_activation_bounds import PreactivationBounds
 
 class FastLip(OtherResult):
 
-	def __init__(self, network, c_vector, domain, lp):
-		super(FastLip, self).__init__(network, c_vector, domain)
-		assert lp in ['linf', 'l2', 'l1']
-		self.lp = lp
+	def __init__(self, network, c_vector, domain, primal_norm):
+		super(FastLip, self).__init__(network, c_vector, domain, primal_norm)
 
-	def compute(self, attr_name=None):
+	def compute(self):
 		# Fast lip is just interval bound propagation through backprop
+		timer = utils.Timer()
 		preacts = PreactivationBounds.naive_ia_from_hyperbox(self.network,
  														    self.domain)
 		preacts.backprop_bounds(self.c_vector)
@@ -29,10 +28,9 @@ class FastLip(OtherResult):
 		self.worst_case_vec = np.maximum(abs(backprop_lows), 
 										 abs(backprop_highs))
 		# And take dual norm of this
-		value = np.linalg.norm(self.worst_case_vec, 
-							   {'linf': 1, 'l1': np.inf, 'l2': 2}[self.lp])
+		dual_norm = {'linf': 1, 'l1': np.inf, 'l2': 2}[self.primal_norm]
+		value = np.linalg.norm(self.worst_case_vec, ord=dual_norm)
 
-		if attr_name is None:
-			attr_name = 'global_%s' % self.lp
-		setattr(self, attr_name, value)
+		self.value = value 
+		self.compute_time = timer.stop()
 		return value

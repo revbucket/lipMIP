@@ -52,7 +52,24 @@ class Hyperbox(object):
             setattr(domain, s, saved_dict[s])
         return domain
 
+    @classmethod
+    def from_twocol(cls, twocol):
+        """ Given a numpy array of shape (m, 2), creates an m-dimensional 
+            hyperbox 
+        ARGS:
+            twocol: np array w/ shape (m, 2)
+        RETURNS: 
+            instance of Hyperbox
+        """
+        domain = cls(twocol.shape[0])
+        domain.center = (twocol[0,:] + twocol[1,:]) / 2.0
+        domain.radius = max(np.maximum(abs(center - twocol[0,:]), 
+                                       abs(center - twocol[1,:])))
+        domain.box_low = twocol[0,:]
+        domain.box_hi = twocol[1,:]
+        return domain 
 
+        
     # ==============================================================
     # =           Forward facing methods                           =
     # ==============================================================

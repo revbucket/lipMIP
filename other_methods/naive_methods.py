@@ -43,10 +43,11 @@ class NaiveUB(OtherResult):
 		elif self.primal_norm == 'linf':
 			self.norm_fxn = self.linf_norm
 
-	def compute(self, attr_name=None):
+	def compute(self):
 		""" Computes the L2 global lipschitz constant for this network
 			by multiplying the operator norm of each weight matrix
 		"""
+		timer = utils.Timer()
 		c_vec_norm = self.norm_fxn(self.c_vector)
 		operator_norms = []
 		for fc in self.network.fcs:
@@ -56,9 +57,8 @@ class NaiveUB(OtherResult):
 		for op_norm in operator_norms:
 			running_norm *= op_norm
 
-		if attr_name is None:
-			attr_name = 'global_%s' % self.primal_norm
-		setattr(self, attr_name, running_norm)
+		self.value = running_norm
+		self.compute_time = timer.stop()
 		return running_norm
 
 # ==========================================================================
@@ -72,18 +72,22 @@ class RandomLB(OtherResult):
 		self.max_norm = None 
 		self.max_point = None 
 		self.max_grad = None
-
+		self.compute_time = None
 	def compute(self, num_points=1000):
 		""" Computes maximum of dual norm of gradients of random points. 
 			Can be called multiple times and will only improve
 		"""
-		pnorm = {'l1':  np.inf, 'l2': 2, 'linf': 1}[self.primal_norm]
+		timer = utils.Timer()
+		dual = {'l1':  np.inf, 'l2': 2, 'linf': 1}[self.primal_norm]
 
 		random_output = self.network.random_max_grad(self.domain, self.c_vector, 
-													 num_points, pnorm=pnorm)
+													 num_points, pnorm=dual)
 		if (self.max_norm is None) or (random_output['norm'] > self.max_norm):
 			self.max_norm  = random_output['norm']
 			self.max_point = random_output['point']
 			self.max_grad  = random_output['grad']
 
-		return self.max_norm
+		self.value = max_norm # redundancy here 
+		if self.compute_time is None:
+			self.compute_time = 0
+		self.compute_time += timer.stop()

@@ -33,11 +33,13 @@ class TrainParameters(ParameterObject):
 		loss_function: None or loss object - if None will default to
 					   crossEntropyLoss (see LossObject at bottom of this )
 		test_after_epoch: bool - if True, we test top1 accuracy after each
-								 epoch
+								 epoch. If an int, we test top1 accuracy 
+								 after each <int> epochs
 		"""
 
-		init_args = {k: v for k, v in locals() if k != 'self'}
-		super(LipParameters, self).__init__(**init_args)
+		init_args = {k: v for k, v in locals().items() 
+					 if k not in ['self', '__class__']}
+		super(TrainParameters, self).__init__(**init_args)
 
 
 
@@ -52,27 +54,35 @@ def training_loop(network, train_params, epoch_start_no=0):
 		None, but modifies network parameters
 	"""
 	# Unpack the parameter object
-	for attr in train_params.attr_list:
-		eval('%s = train_params.%s' % (attr, attr))
-
-	if optimizer is None:
+	if train_params.optimizer is None:
 		optimizer = optim.Adam(network.parameters(), lr=0.001, weight_decay=0)
-	if loss_functional is None:
-		loss_functional = LossFunctional(network,
- 										 regularizers=[XEntropyReg(network)])
+	else:
+		optimizer = train_params.optimizer 
 
-	for epoch_no in range(num_epochs):
-		for examples, labels in trainset:
+	if train_params.test_after_epoch is False:
+		test_after_epoch = float('inf')
+	else:
+		test_after_epoch = int(train_params.test_after_epoch)
+
+	if train_params.loss_functional is None:
+		loss_functional = LossFunctional(regularizers=[XEntropyReg()])
+	else:
+		loss_functional = train_params.loss_functional
+	loss_functional.attach_network(network)
+	
+	# Do the training loop
+	for epoch_no in range(epoch_start_no, epoch_start_no + train_params.num_epochs):
+		for i, (examples, labels) in enumerate(train_params.trainset):
 			optimizer.zero_grad()
 			loss = loss_functional(examples, labels)
 			loss.backward()
 			optimizer.step()
-		if test_after_epoch:
-			test_acc = test_validation(network, valset)
+		if (epoch_no) % test_after_epoch == 0:
+			# If we run test accuracy this test
+			test_acc = test_validation(network, train_params.valset)
 			test_acc_str = '| Accuracy: %.02f' % (test_acc * 100)
-		else:
-			test_acc_str = ''
-		print(("Epoch %02d " % (epoch_no + epoch_start_no)) + test_acc_str)
+			print(("Epoch %02d " % epoch_no) + test_acc_str)
+
 
 
 def test_validation(network, valset, loss_functional=None):
@@ -131,7 +141,7 @@ class LossFunctional:
 		Regularizer objects which return scalar loss values.
 		self.forward(...) returns the weighted sum of the regularizers
 	"""
-	def __init__(self, network, regularizers=None):
+	def __init__(self, network=None, regularizers=None):
 		self.network = network
 		if regularizers is None:
 			regularizers = []
@@ -146,6 +156,12 @@ class LossFunctional:
 
 	def __call__(self, examples, labels):
 		return self.forward(examples, labels)
+
+
+	def attach_network(self, network):
+		self.network = network 
+		for reg in self.regularizers:
+			reg.attach_network(network)
 
 
 	def forward(self, examples, labels):
@@ -171,7 +187,11 @@ class Regularizer(ABC):
 	def __init__(self, scalar=1.0):
 		self.scalar = scalar
 		self.requires_ff = None
+		self.network = None
 		pass
+
+	def attach_network(self, network):
+		self.network = network
 
 	@abstractmethod
 	def forward(self, examples, labels, outputs=None):
@@ -179,7 +199,7 @@ class Regularizer(ABC):
 
 
 class XEntropyReg(Regularizer):
-	def __init__(self, network, scalar=1.0):
+	def __init__(self, network=None, scalar=1.0):
 		super(XEntropyReg, self).__init__(scalar)
 		self.network = network
 		self.requires_ff = True
@@ -193,11 +213,12 @@ class XEntropyReg(Regularizer):
 		return self.scalar * nn.CrossEntropyLoss()(outputs, labels)
 
 
-class L1WeightReg(Regularizer):
-	def __init__(self, network, scalar=1.0):
-		super(L1WeightReg, self).__init__(scalar)
+class LpWeightReg(Regularizer):
+	def __init__(self, network=None, scalar=1.0, lp='l1'):
+		super(LpWeightReg, self).__init__(scalar)
 
 		self.network = network
+		self.p_norm = {'l1': 1, 'l2': 2, 'linf': float('inf')}[lp]
 		self.requires_ff = False
 
 	def __repr__(self):
@@ -205,13 +226,15 @@ class L1WeightReg(Regularizer):
 
 	def forward(self, examples, labels, outputs=None):
 		""" Just return the l1 norm of the weight matrices """
-		l1_weight = lambda fc: fc.weight.norm(1)
+		l1_weight = lambda fc: fc.weight.norm(self.p_norm)
 		return self.scalar * sum(l1_weight(fc) for fc in self.network.fcs)
+
+
 
 
 class ReluStability(Regularizer):
 
-	def __init__(self, network, scalar=1.0, l_inf_radius=None,
+	def __init__(self, network=None, scalar=1.0, l_inf_radius=None,
 				 global_lo=None, global_hi=None):
 		super(ReluStability, self).__init__(scalar)
 
@@ -281,7 +304,7 @@ class LipschitzReg(Regularizer):
 		    norm depending on the tv_or_max parameter.
 		    (loss is standard CrossEntropyLoss )
 	"""
-	def __init__(self, network, scalar=1.0, tv_or_max='tv', lp_norm=1):
+	def __init__(self, network=None, scalar=1.0, tv_or_max='tv', lp_norm=1):
 		super(LipschitzReg, self).__init__(scalar)
 		self.network = network
 		self.requires_ff = False # Got to do a custom FF here
@@ -313,7 +336,7 @@ class LipschitzReg(Regularizer):
 
 
 class GradientStability(ReluStability):
-	def __init__(self, network, scalar=1.0, l_inf_radius=None,
+	def __init__(self, network=None, scalar=1.0, l_inf_radius=None,
 				 global_lo=None, global_hi=None, c_vector=None):
 		super(GradientStability, self).__init__(network, scalar, l_inf_radius,
 												global_lo=None, global_hi=None)

@@ -8,17 +8,41 @@ import matplotlib.pyplot as plt
 import io
 import contextlib
 import tempfile
+import time 
 
 # ===============================================================================
 # =           Helpful all-purpose functions                                     =
 # ===============================================================================
 
 class ParameterObject:
-	def __init__(self, other, **kwargs):
-		other.attr_list = [] 
-		for k, v in kwargs.items():
-			setattr(other, k, v)
-			other.attr_list.append(k)
+	def __init__(self, **kwargs):
+		self.attr_list = []
+		assert 'attr_list' not in kwargs
+		for k,v in kwargs.items():
+			setattr(self, k, v)
+			self.attr_list.append(k)
+
+class Timer:
+	def __init__(self, start_on_init=True):
+		if start_on_init:
+			self.start()
+
+	def start(self):
+		self.start_time = time.time()
+
+	def stop(self):
+		self.stop_time = time.time()
+		return self.stop_time - self.start_time()
+
+	def reset(self):
+		self.start_time = self.stop_time = None
+
+def prod(num_iter):
+	""" returns product of all elements in this iterator *'ed together"""
+	cumprod = 1
+	for el in num_list:
+		cumprod *= el
+	return cumprod
 
 
 def as_numpy(tensor_or_array):
@@ -167,3 +191,21 @@ def display_images(image_rows, figsize=(8, 8)):
 	ax.axis('off')
 	ax.imshow(full_image, **imshow_kwargs)	
 	plt.show()
+
+
+
+# ======================================================
+# =           Pytorch helpers                          =
+# ======================================================
+
+def seq_append(seq, module):
+	""" Takes a nn.sequential and a nn.module and creates a nn.sequential
+		with the module appended to it
+	ARGS:
+		seq: nn.Sequntial object 
+		module: <inherits nn.Module>
+	RETURNS:
+		nn.Sequential object 
+	"""
+	seq_modules = [seq[_] for _ in range(len(seq))] + [module]
+	return nn.Sequential(*seq_modules)

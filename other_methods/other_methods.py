@@ -21,6 +21,8 @@ class OtherResult:
 		self.domain = domain
 		assert primal_norm in ['l1', 'l2', 'linf']
 		self.primal_norm = primal_norm
+		self.compute_time = None
+		self.value = None
 
 	def attach_label(self, label):
 		""" Cute way to attach a label to a result """

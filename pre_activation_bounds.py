@@ -5,6 +5,7 @@ from hyperbox import Hyperbox
 import utilities as utils
 import torch
 import numpy as np
+import torch.nn as nn
 
 
 # ====================================================================
@@ -26,19 +27,22 @@ class PreactivationBounds(object):
         self.backprop_lows = {}
         self.backprop_highs = {}
         self.backprop_vector = None
-        
+
 
     def add_ith_layer_bounds(self, i, lows, highs):
         """ Adds the bounds as a [n_neurons, 2] numpy array """
         self.low_dict[i] = lows
         self.high_dict[i] = highs
 
-
     def get_ith_layer_bounds(self, i, two_col=False):
         output = self.low_dict[i], self.high_dict[i]
         if two_col:
             return utils.two_col(*output)
         return output
+
+    def bound_iter(self, two_col=False):
+        for i in range(len(self.low_dict)):
+            yield self.get_ith_layer_bounds(i, two_col=two_col)
 
     def get_ith_layer_backprop_bounds(self, i, two_col=False):
         output = self.backprop_lows[i], self.backprop_highs[i]
@@ -218,18 +222,26 @@ def naive_interval_analysis(network, domain):
 
     preact_object = PreactivationBounds(network, domain)
     prev_lows, prev_highs = domain.box_low, domain.box_hi
-    for layer_no, fc in enumerate(network.fcs):
-        midpoint = (prev_lows + prev_highs) / 2.0
-        radius = (prev_highs - prev_lows) / 2.0
-        new_midpoint = utils.as_numpy(fc(torch.Tensor(midpoint)))
-        new_radius = utils.as_numpy(torch.abs(fc.weight)).dot(radius)
-        prev_lows = new_midpoint - new_radius
-        prev_highs = new_midpoint + new_radius
-        preact_object.add_ith_layer_bounds(layer_no, prev_lows, prev_highs)
+    relu_num = 0
+    for layer_num, layer in enumerate(network.net):
+        if isinstance(layer, nn.ReLU):
+            preact_object.add_ith_layer_bounds(relu_num, prev_lows, prev_highs)
+            relu_num += 1
+            prev_lows = np.maximum(prev_lows, 0)
+            prev_highs = np.maximum(prev_highs, 0)
+        elif isinstance(layer, nn.Linear):
+            midpoint = (prev_lows + prev_highs) / 2.0
+            radius = (prev_highs - prev_lows) / 2.0
+            new_midpoint = utils.as_numpy(layer(torch.Tensor(midpoint)))
+            new_radius = utils.as_numpy(torch.abs(layer.weight)).dot(radius)
+            prev_lows = new_midpoint - new_radius
+            prev_highs = new_midpoint + new_radius
+
+
+    if isinstance(network.net[-1], nn.Linear):
+        preact_object.add_ith_layer_bounds(relu_num, prev_lows, prev_highs)
+
     return preact_object
-
-
-
 
 
 def improved_interval_analysis(network, domain):

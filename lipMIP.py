@@ -19,7 +19,7 @@ import pprint
    1) Encode the neural network forward pass with linear
    	  constraints and 1 0/1 integer per ReLU
    2) Encode the gradient as n more variables with integral
-   	  constraints controlling the on/off-ness
+   	  constraints controlling the on/off-ness	
    3) Take the backprop values and generate the desired norm
 
    Throughout, we'll store variables in a GurobiSquire object
@@ -34,49 +34,65 @@ import pprint
 # =======================================================
 
 class LipParameters(utils.ParameterObject):
-	def __init__(self, domain, l_p, c_vector, preact_method='ia',
+	def __init__(self, domain, c_vector, l_p='l_inf', preact_method='ia',
 				 verbose=False, timeout=None):
-		init_args = {k: v for k, v in locals() if k != 'self'}
+		init_args = {k: v for k, v in locals().items() 
+					 if k not in ['self', '__class__']}
 		super(LipParameters, self).__init__(**init_args)
 
+	def change_domain(self, new_domain):
+		""" Makes a new LipParameters object with a modified domain. 
+			Keeps all kwargs the same 
+		"""
+		return LipParameters(new_domain, self.lp, self.c_vector, 
+							 preact_method=self.preact_method,
+							 verbose=self.verbose,
+							 timeout=self.timeout)
 
-def compute_max_lipschitz(network, lip_params):
-	""" Computes the maximum lipschitz constant with a fixed
-		domain already set.
 
-		Returns the maximum lipschitz constant and the point that
-		attains it
-	"""
-	for attr in lip_params.attr_list:
-		eval('%s = train_params.%s' % (attr, attr))
+class LipProblem:
+	def __init__(self, network, lip_params):
+		self.network = network
+		self.lip_params = lip_params
 
-	assert l_p == 'l_inf' # Meaning we want max ||grad(f)||_1
-	assert preact_method  in ['ia'] # add full_lp later
 
-	start = time.time()
+	def compute_max_lipschitz(self):
+		""" Computes the maximum lipschitz constant with a fixed
+			domain already set.
 
-	squire, model, preacts = build_gurobi_model(network, domain, l_p,
-   	   									        c_vector, 
-   	   									        preact_method=preact_method,
-										        verbose=verbose)
+			Returns the maximum lipschitz constant and the point that
+			attains it
+		"""
+		network = self.network
+		params = self.lip_params
 
-	if timeout is not None:
-		model.setParam('TimeLimit', timeout)
+		assert params.l_p == 'l_inf' # Meaning we want max ||grad(f)||_1
+		assert params.preact_method  in ['ia'] # add full_lp later
 
-	model.optimize()
-	if model.Status == 3:
-		print("INFEASIBLE")
+		start = time.time()
 
-	end = time.time()
-	x_vars = squire.get_vars('x')
-	value = model.getObjective().getValue()
-	best_x = np.array([v.X for v in x_vars])
-	result = LipMIPResult(network, c_vector, value=value, model=model,
-						  runtime=(end - start), preacts=preacts,
-						  best_x=best_x, domain=domain)
-	return result
+		squire, model, preacts = build_gurobi_model(network, params.domain, 
+											params.l_p, params.c_vector,
+   									        preact_method=params.preact_method,
+									        verbose=params.verbose)
 
-# ======  End of MAIN SOLVER BLOCK                =======
+		if params.timeout is not None:
+			model.setParam('TimeLimit', params.timeout)
+
+		model.optimize()
+		if model.Status == 3:
+			print("INFEASIBLE")
+
+		end = time.time()
+		x_vars = squire.get_vars('x')
+		value = model.getObjective().getValue()
+		best_x = np.array([v.X for v in x_vars])
+		result = LipMIPResult(network, params.c_vector, value=value, model=model,
+							  runtime=(end - start), preacts=preacts,
+							  best_x=best_x, domain=params.domain, squire=squire)
+		return result
+
+		# ======  End of MAIN SOLVER BLOCK                =======
 
 
 # ==============================================================
@@ -127,7 +143,7 @@ class EvaluationParameters(utils.ParameterObject):
 	def __init__(self, hypercube_kwargs=None, radius_kwargs=None,
 				 data_eval_kwargs=None, num_random_eval_kwargs=None,
 				 max_lipschitz_kwargs=None):
-	""" Stores parameters for evaluation objects """
+		""" Stores parameters for evaluation objects """
 		super(EvaluationParameters, self).__init__(**kwargs)
 
 	def __call__(self, network, c_vector, data_iter=None):
@@ -326,11 +342,13 @@ class GurobiSquire():
 		if reset:
 			for i, x_var in enumerate(self.get_vars('x')):
 				self.model.remove(self.model.getConstrByName(constr_namer(x_var.varName)))
+
 			self.model.update()
 		return gradient
 
 def build_gurobi_model(network, domain, l_p, c_vector,
-					   preact_method='ia', verbose=False):
+					   preact_method='ia', verbose=False,
+					   do_backpass=True, first_k=None):
 
 	# Build model + squire
 	with utils.silent(): # ain't nobody tryna hear about your gurobi license
@@ -354,9 +372,10 @@ def build_gurobi_model(network, domain, l_p, c_vector,
 	squire.set_preact_object(preacts)
 
 	build_input_constraints(network, model, squire, domain, 'x')
-	build_forward_pass_constraints(network, model, squire)
-	build_back_pass_constraints(network, model, squire, c_vector)
-	build_objective(network, model, squire, l_p)
+	build_forward_pass_constraints(network, model, squire, first_k=first_k)
+	if do_backpass:
+		build_back_pass_constraints(network, model, squire, c_vector)
+		build_objective(network, model, squire, l_p)
 
 
 	# Return the squire and model
@@ -366,7 +385,7 @@ def build_gurobi_model(network, domain, l_p, c_vector,
 
 
 def build_forward_pass_constraints(relunet, gurobi_model,
-								   gurobi_squire):
+								   gurobi_squire, first_k=None):
 
 	for i, fc_layer in enumerate(relunet.fcs[:-1]):
 		if i == 0:
@@ -381,6 +400,9 @@ def build_forward_pass_constraints(relunet, gurobi_model,
 							 gurobi_squire, input_name, pre_relu_name)
 		add_relu_layer_mip(relunet, i, gurobi_model, gurobi_squire,
 						   pre_relu_name, relu_name, post_relu_name)
+		if first_k is not None and i >= first_k:
+			gurobi_model.update()
+			return
 
 	output_var_name = 'logits'
 	add_linear_layer_mip(relunet, len(relunet.fcs) - 1, gurobi_model,
@@ -433,7 +455,7 @@ def build_objective(relunet, gurobi_model,
 
 def build_input_constraints(network, model, squire, domain, var_key):
 
-	# If domain is a hyperbox, don't need to add any Gurobi constraints
+	# If domain is a hyperbox, can cover with lb/ub in var constructor
 	var_namer = utils.build_var_namer(var_key)
 	input_vars = []
 	if isinstance(domain, Hyperbox):
@@ -612,48 +634,6 @@ def add_backprop_switch_layer_mip(network, layer_no, model, squire,
 	model.update()
 	squire.set_vars(output_key, post_switch_vars)
 
-
-
-def add_abs_layer_bad(network, model, squire, input_key,
-				  sign_key, output_key):
-	""" Encodes the function abs(neg[i] + pos[i]) """
-	input_vars = squire.get_vars(input_key)
-	abs_var_namer = utils.build_var_namer(output_key)
-	sign_var_namer = utils.build_var_namer(sign_key)
-	grad_bounds = squire.get_backprop_bounds(0, two_col=True)
-	print("GRAD BOUNDS", grad_bounds)
-	sign_vars = {}
-	abs_vars = []
-
-	for i, input_var in enumerate(input_vars):
-		grad_lo, grad_hi = grad_bounds[i]
-
-		if grad_lo >= 0:
-			# No sign var -- always positive
-			abs_var = model.addVar(lb=0.0, name=abs_var_namer(i))			
-			model.addConstr(abs_var == input_var)
-		elif grad_hi <= 0:
-			# No sign var -- always negative
-			abs_var = model.addVar(lb=0.0, name=abs_var_namer(i))
-			model.addConstr(abs_var == -1 * input_var)
-		else:
-			# Need to encode the absolute value variable
-			abs_var = model.addVar(lb=0.0, name=abs_var_namer(i))
-			sign_var = model.addVar(lb=0, ub=1, vtype=gb.GRB.BINARY,
-									name=sign_var_namer(i))
-			hilo = grad_hi - grad_lo + 1e-1
-			print("HILO", grad_hi - grad_lo)
-			model.addConstr(abs_var >= input_var)
-			model.addConstr(abs_var >= -input_var)
-			#model.addConstr(abs_var <= -input_var + (1-sign_var) * hilo)
-			model.addConstr(abs_var <= input_var + sign_var * hilo)
-			sign_vars[i] = sign_var
-		abs_vars.append(abs_var)
-
-
-	model.update()
-	squire.set_vars(output_key, abs_vars)
-	squire.set_vars(sign_key, sign_vars)
 
 
 def add_abs_layer(network, model, squire, input_key, 
