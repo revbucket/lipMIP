@@ -109,24 +109,26 @@ class Hyperbox(object):
 
 
 
-    def random_point(self, num_points=1, tensor_or_np='np'):
-    	""" Returns a uniformly random point in this hyperbox
-    	ARGS:
-    		num_points: int - number of output points to return
-    		tensor_or_np: string ['np' or 'tensor'] - decides whether to
-    					  return a torch.Tensor or a numpy array
-    	RETURNS:
-    		(numpy array | tensor) of w/ shape (num_points, self.x.shape[0])
-    	"""
-    	assert tensor_or_np in ['np', 'tensor']
-    	diameter = (self.box_hi - self.box_low)
-    	random_points = np.random.random((num_points, self.center.size))
-    	random_points = random_points * diameter + self.box_low
+    def random_point(self, num_points=1, tensor_or_np='np', 
+                     requires_grad=False):
+        """ Returns a uniformly random point in this hyperbox
+        ARGS:
+            num_points: int - number of output points to return
+            tensor_or_np: string ['np' or 'tensor'] - decides whether to
+                          return a torch.Tensor or a numpy array
+        RETURNS:
+            (numpy array | tensor) of w/ shape (num_points, self.x.shape[0])
+        """
+        assert tensor_or_np in ['np', 'tensor']
+        diameter = (self.box_hi - self.box_low)
+        shape = (num_points, self.center.size)
+        random_points = np.random.random((num_points, self.center.size))
+        random_points = random_points * diameter + self.box_low
 
-    	if tensor_or_np == 'tensor':
-    		return torch.Tensor(random_points)
-    	else:
-    		return random_points
+        if tensor_or_np == 'tensor':
+            return torch.tensor(random_points, requires_grad=requires_grad)
+        else:
+            return random_points
 
 
     # ==========================================================================

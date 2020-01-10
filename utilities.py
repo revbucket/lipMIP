@@ -32,17 +32,29 @@ class Timer:
 
 	def stop(self):
 		self.stop_time = time.time()
-		return self.stop_time - self.start_time()
+		return self.stop_time - self.start_time
 
 	def reset(self):
 		self.start_time = self.stop_time = None
 
+
+
 def prod(num_iter):
 	""" returns product of all elements in this iterator *'ed together"""
 	cumprod = 1
-	for el in num_list:
+	for el in num_iter:
 		cumprod *= el
 	return cumprod
+
+
+def partition(n, m):
+	""" Given ints n > m, partitions n into an iterable where all 
+		elements are m, except for the last one which is (n % m)
+	"""
+	count = 0
+	while count < n:
+		yield min([m, n - count])
+		count += m
 
 
 def as_numpy(tensor_or_array):

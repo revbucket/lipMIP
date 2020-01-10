@@ -7,6 +7,7 @@ from hyperbox import Hyperbox, LinfBallFactory
 from pre_activation_bounds import PreactivationBounds
 import time
 import pprint
+import re
 
 """
 
@@ -34,7 +35,7 @@ import pprint
 # =======================================================
 
 class LipParameters(utils.ParameterObject):
-	def __init__(self, domain, c_vector, l_p='l_inf', preact_method='ia',
+	def __init__(self, domain, c_vector, lp='linf', preact_method='ia',
 				 verbose=False, timeout=None):
 		init_args = {k: v for k, v in locals().items() 
 					 if k not in ['self', '__class__']}
@@ -66,13 +67,13 @@ class LipProblem:
 		network = self.network
 		params = self.lip_params
 
-		assert params.l_p == 'l_inf' # Meaning we want max ||grad(f)||_1
+		assert params.lp == 'linf' # Meaning we want max ||grad(f)||_1
 		assert params.preact_method  in ['ia'] # add full_lp later
 
 		start = time.time()
 
 		squire, model, preacts = build_gurobi_model(network, params.domain, 
-											params.l_p, params.c_vector,
+											params.lp, params.c_vector,
    									        preact_method=params.preact_method,
 									        verbose=params.verbose)
 
@@ -150,7 +151,7 @@ class EvaluationParameters(utils.ParameterObject):
 
 		eval_obj = LipMIPEvaluation(network, c_vector)
 		# Set up eval objects for each case of evaluation
-		
+
 		# Random evaluations
 		if num_random_eval is not None:
 			eval_obj.do_random_evals()
@@ -198,7 +199,7 @@ class LipMIPEvaluation:
 		random_points = sample_domain.random_point(num_random_points)
 		for random_point in random_points:
 			domain = ball_factory(random_point)
-			result = compute_max_lipschitz(self.network, domain, 'l_inf', 
+			result = compute_max_lipschitz(self.network, domain, 'linf', 
 										   self.c_vector, **max_lipschitz_kwargs)
 			self.random_eval.append(result)
 
@@ -211,7 +212,7 @@ class LipMIPEvaluation:
 
 		max_lipschitz_kwargs = max_lipschitz_kwargs or {}
 		cube = Hyperbox.build_unit_hypercube(self.network.layer_size[0])
-		result = compute_max_lipschitz(self.network, domain, 'l_inf', 
+		result = compute_max_lipschitz(self.network, domain, 'linf', 
 									   self.c_vector, **max_lipschitz_kwargs)
 		self.unit_hypercube_eval = result
 
@@ -227,7 +228,7 @@ class LipMIPEvaluation:
 		max_lipschitz_kwargs = max_lipschitz_kwargs or {}
 		dim = self.network.layer_sizes[0]
 		cube = Hyperbox.build_linf_ball(np.zeros(dim), r)
-		result = compute_max_lipschitz(self.network, domain, 'l_inf', 
+		result = compute_max_lipschitz(self.network, domain, 'linf', 
 									   self.c_vector, **max_lipschitz_kwargs)
 		self.large_radius_eval = result
 
@@ -261,7 +262,7 @@ class LipMIPEvaluation:
 
 		for p in data_points:
 			hbox = ball_factory(p)
-			result = compute_max_lipschitz(self.network, hbox, 'l_inf', 
+			result = compute_max_lipschitz(self.network, hbox, 'linf', 
 										   self.c_vector, **max_lipschitz_kwargs)
 			if label is not None:
 				result.attach_label(label)
@@ -346,7 +347,51 @@ class GurobiSquire():
 			self.model.update()
 		return gradient
 
-def build_gurobi_model(network, domain, l_p, c_vector,
+	def lp_ify_model(self, tighter_relu=False):
+		""" Converts this model to a linear program. 
+			If tighter_relu is True, we add convex upper envelope constraints 
+			for all ReLU's, otherwise we just change binary variables to 
+			continous ones. 
+		RETURNS:
+			gurobi model object (does not change self at all)
+		"""
+		self.model.update()
+		model_clone = self.model.copy()
+		for var in model_clone.getVars():
+			if var.VType == gb.GRB.BINARY:
+				var.VType = gb.GRB.CONTINUOUS
+				var.LB = 0.0
+				var.UB = 1.0 
+		model_clone.update()
+
+		if not tighter_relu: # If we don't do the tight relu
+			return model_clone
+
+
+		# For each ReLU variable, collect it's pre/post inputs and the
+		# bounds
+		relu_regex = r'^relu_\d+$'
+		for key in self.var_dict:
+			if re.match(relu_regex, key) is None:
+				continue 
+			suffix = key.split('_')[1]
+			bounds = self.get_preact_bounds(int(suffix) - 1, two_col=True)
+			pre_relu_namer = utils.build_var_namer('fc_%s_pre' % suffix)
+			post_relu_namer = utils.build_var_namer('fc_%s_post' % suffix)
+			for idx in self.var_dict[key]:
+				pre_var = model_clone.getVarByName(pre_relu_namer(idx))
+				post_var = model_clone.getVarByName(post_relu_namer(idx))
+				lo, hi = bounds[idx]
+				pre_var.LB = lo 
+				pre_var.UB = hi
+				assert (lo < 0 < hi)
+				model_clone.addConstr(post_var <= hi * pre_var / (hi - lo) 
+												  - hi * lo / (hi - lo) )
+		model_clone.update()
+		return model_clone
+
+
+def build_gurobi_model(network, domain, lp, c_vector,
 					   preact_method='ia', verbose=False,
 					   do_backpass=True, first_k=None):
 
@@ -375,7 +420,7 @@ def build_gurobi_model(network, domain, l_p, c_vector,
 	build_forward_pass_constraints(network, model, squire, first_k=first_k)
 	if do_backpass:
 		build_back_pass_constraints(network, model, squire, c_vector)
-		build_objective(network, model, squire, l_p)
+		build_objective(network, model, squire, lp)
 
 
 	# Return the squire and model
@@ -435,9 +480,9 @@ def build_back_pass_constraints(relunet, gurobi_model,
 	gurobi_model.update()
 
 def build_objective(relunet, gurobi_model,
-					gurobi_squire, l_p):
+					gurobi_squire, lp):
 	gradient_key = 'gradient'
-	if l_p == 'l_inf':
+	if lp == 'linf':
 		abs_sign_key = 'abs_sign'
 		abs_grad_key = 'abs_grad'
 		add_abs_layer(relunet, gurobi_model, gurobi_squire,

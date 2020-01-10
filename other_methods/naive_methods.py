@@ -87,7 +87,8 @@ class RandomLB(OtherResult):
 			self.max_point = random_output['point']
 			self.max_grad  = random_output['grad']
 
-		self.value = max_norm # redundancy here 
+		self.value = self.max_norm # redundancy here 
 		if self.compute_time is None:
 			self.compute_time = 0
 		self.compute_time += timer.stop()
+		return self.value
