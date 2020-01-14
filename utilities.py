@@ -22,6 +22,16 @@ class ParameterObject:
 			setattr(self, k, v)
 			self.attr_list.append(k)
 
+	def change_attrs(self, **kwargs):
+		new_kwargs = {}
+		for attr in self.attr_list:
+			if attr in kwargs:
+				new_kwargs[attr] = kwargs[attr]
+			else:
+				new_kwargs[attr] = getattr(self, attr)
+		return self.__class__(**new_kwargs)
+
+
 class Timer:
 	def __init__(self, start_on_init=True):
 		if start_on_init:
@@ -55,6 +65,43 @@ def partition(n, m):
 	while count < n:
 		yield min([m, n - count])
 		count += m
+
+def flatten_list(lol):
+	""" Given list of lists, flattens it into a single list. """
+
+	output = []
+	for el in lol:
+		if not isinstance(el, list):
+			output.append(el)
+			continue
+		output.extend(flatten_list(el))
+	return output
+
+def partition_by_suffix(iterable, func):
+	""" Given an iterable and a boolean-valued function which takes in 
+		elements of that iterable, outputs a list of lists, where each list 
+		ends in an element for which the func returns true, (except for the 
+		last one)		
+		e.g. 
+		iterable := [1, 2, 3, 4, 5,5, 5]
+		func := lambda x: (x % 2) == 0
+		returns [[1,2], [3,4], [5, 5, 5]]
+	"""
+	output = [] 
+	sublist = [] 
+	for el in iterable:
+		sublist.append(el)
+		if func(el):
+			output.append(sublist)
+			sublist = []
+
+	if len(sublist) > 0:
+		output.append(sublist)
+	return output
+
+
+def arraylike(obj):
+	return isinstance(obj, (torch.Tensor, np.ndarray))
 
 
 def as_numpy(tensor_or_array):

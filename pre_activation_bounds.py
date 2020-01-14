@@ -11,13 +11,21 @@ import torch.nn as nn
 # ====================================================================
 # =           Class to store preactivation bound results             =
 # ====================================================================
-
+#  REFACTOR THIS -- SOOOOO UGLY!!!
 
 class PreactivationBounds(object):
 
     @classmethod
-    def naive_ia_from_hyperbox(cls, network, hyperbox):
+    def naive_ia(cls, network, hyperbox):
         return naive_interval_analysis(network, hyperbox)
+
+    @classmethod
+    def preact_constructor(cls, preact_input, network, hyperbox):
+        if preact_input == 'ia':
+            return cls.naive_ia_from_hyperbox(network, hyperbox)
+        elif isinstance(preact_input, PreactivationBounds):
+            return preact_input
+
 
     def __init__(self, network, hyperbox):
         self.network = network
@@ -27,6 +35,13 @@ class PreactivationBounds(object):
         self.backprop_lows = {}
         self.backprop_highs = {}
         self.backprop_vector = None
+
+    def _forward_computed(self):
+        return sum(len(_) for _ in [self.low_dict, self.high_dict]) > 0
+
+    def _backward_computed(self):
+        return sum(len(_) for _ in
+                   [self.backprop_lows, self.backprop_highs]) > 0
 
 
     def add_ith_layer_bounds(self, i, lows, highs):
@@ -78,12 +93,17 @@ class PreactivationBounds(object):
 
             This is related, but not identical to fast-lip
         ARGS:
+            c_vector: torch.Tensor, np.ndarray, or 
+            
             c_vector: torch.Tensor or np.ndarray - tensor or array
                       that is the output of self.network gets multiplied by
         RETURNS:
             None, but sets self.backprop_vector, self.backprop_low,
                            self.backprop_high
         """
+        if self._backward_computed():
+            return 
+            
         preswitch_lows = {}
         preswitch_highs = {}
         postswitch_lows = {}

@@ -7,6 +7,10 @@ import numbers
 import utilities as utils
 
 
+class Domain:
+    pass
+
+
 class LinfBallFactory(object):
     """ Class to easily generate l_inf balls with fixed radius and global bounds
         (but no center)
@@ -24,7 +28,7 @@ class LinfBallFactory(object):
 
 
 
-class Hyperbox(object):
+class Hyperbox(Domain):
     def __init__(self, dimension):
         self.dimension = dimension
 
@@ -36,6 +40,7 @@ class Hyperbox(object):
         self.box_low = None # ARRAY!
         self.box_hi = None # ARRAY!
 
+    # CONSTRUCTOR OVERVIEW: 
     def as_dict(self):
         return {'dimension':                self.dimension,
                 'center':                   self.center,
@@ -61,13 +66,42 @@ class Hyperbox(object):
         RETURNS: 
             instance of Hyperbox
         """
-        domain = cls(twocol.shape[0])
-        domain.center = (twocol[0,:] + twocol[1,:]) / 2.0
-        domain.radius = max(np.maximum(abs(center - twocol[0,:]), 
-                                       abs(center - twocol[1,:])))
-        domain.box_low = twocol[0,:]
-        domain.box_hi = twocol[1,:]
-        return domain 
+        dimension = twocol.shape[0]
+        center = (twocol[:, 0] + twocol[:, 1]) / 2.0
+        radius = max(np.maximum(abs(center - twocol[:, 0]), 
+                                abs(center - twocol[:, 1])))
+        return Hyperbox.from_dict({'dimension': dimension, 
+                                   'center': center, 
+                                   'radius': radius, 
+                                   'box_low': twocol[:, 0], 
+                                   'box_hi':  twocol[:, 1]})
+
+
+    @classmethod 
+    def from_midpoint_radii(cls, midpoint, radii):
+        """ Takes in two numpy ndarrays and builds a new Hyperbox object
+        ARGS:
+            midpoint : np.ndarray describing the center of a hyperbox
+            radii : np.ndarray describing the coordinate-wise range
+                e.g. H_i in [midpoint_i - radii_i, midpoint_i + radii_i]
+        RETURNS:
+            hyperbox object 
+        """
+        new_hbox = Hyperbox(len(midpoint))
+        new_hbox.box_low = midpoint - radii 
+        new_hbox.box_hi = midpoint + radii 
+
+        return new_hbox
+
+    @classmethod
+    def from_vector(cls, c):
+        """ Takes in a single numpy array and denotes this as the 
+            hyperbox containing that point 
+        """
+        c = utils.as_numpy(c)
+        return cls.from_dict({'center': c, 'radius': 0.0, 
+                              'box_low': c, 'box_hi': c,
+                              'dimension': len(c)})
 
         
     # ==============================================================
@@ -121,14 +155,48 @@ class Hyperbox(object):
         """
         assert tensor_or_np in ['np', 'tensor']
         diameter = (self.box_hi - self.box_low)
-        shape = (num_points, self.center.size)
-        random_points = np.random.random((num_points, self.center.size))
+        shape = (num_points, self.dimension)
+        random_points = np.random.random((num_points, self.dimension))
         random_points = random_points * diameter + self.box_low
 
         if tensor_or_np == 'tensor':
             return torch.tensor(random_points, requires_grad=requires_grad)
         else:
             return random_points
+
+    def as_twocol(self):
+        return np.stack([self.box_low, self.box_hi]).T
+
+
+    def map_linear(self, linear, forward=True):
+        """ Takes in a torch.Linear operator and maps this object through 
+            the linear map (either forward or backward)
+        ARGS:
+            linear : nn.Linear object - 
+            forward: boolean - if False, we map this 'backward' as if we
+                      were doing backprop
+        """
+        assert isinstance(linear, nn.Linear)
+        midpoint = (self.box_hi + self.box_low) / 2.0 
+        radii = (self.box_hi - self.box_low) / 2.0 
+
+        if forward:
+            new_midpoint = utils.as_numpy(linear(torch.Tensor(midpoint)))
+            new_radii = utils.as_numpy(torch.abs(linear.weight)).dot(radii)
+        else:
+            torch_mid = torch.Tensor(midpoint)
+            torch_radii = torch.Tensor(radii)
+            new_midpoint = utils.as_numpy(linear.weight.t() @ torch_mid)
+            new_radii = utils.as_numpy(linear.weight.t().abs() @ torch_radii)
+
+        return Hyperbox.from_midpoint_radii(new_midpoint, new_radii)
+
+
+    def map_relu(self):
+        """ Returns the hyperbox attained by mapping this hyperbox through 
+            elementwise ReLU operators
+        """
+        return Hyperbox.from_twocol(np.maximum(self.as_twocol(), 0))
 
 
     # ==========================================================================
@@ -163,3 +231,67 @@ class Hyperbox(object):
         """ Converts float to array of dimension self.dimension """
         assert isinstance(number_val, numbers.Real)
         return np.ones(self.dimension) * number_val
+
+
+
+
+class BooleanHyperbox:
+    """ Way to represent a vector of {-1, ?, 1} as a boolean 
+        hyperbox. e.g., [-1, ?] = {(-1, -1), (-1, +1)}
+    """
+
+
+    @classmethod
+    def from_hyperbox(cls, hbox):
+        """ Takes a hyperbox and represents the orthants it resides in
+        """
+
+        values = np.zeros(hbox.dimension)
+        values[hbox.box_low > 0] = 1
+        values[hbox.box_hi < 0] = -1
+        return BooleanHyperbox(values)
+
+
+    def __init__(self, values):
+        """ Values gets stored as its numpy array of type np.int8 
+            where all values are -1, 0, 1 (0 <=> ? <=> {-1, +1})
+        """
+        self.values = utils.as_numpy(values).astype(np.int8)
+        self.dimension = len(self.values)
+
+    def map_switch(self, hyperbox):
+        """ Maps a hyperbox through elementwise switch operators
+            where the switch values are self.values. 
+        In 1-d switch works like this: given interval I and booleanbox a
+        SWITCH(I, a): = (0,0)                        if (a == -1)
+                        I                            if (a == +1)
+                        (min(I[0], 0), max(I[1], 0)) if (a == 0)
+        ARGS:
+            hyperbox: hyperbox governing inputs to switch layer 
+        RETURNS: 
+            hyperbox with element-wise switch's applied
+        """
+        switch_off = self.values < 0
+        switch_on = self.values > 0
+        switch_q = self.values == 0
+
+        # On case by default
+        new_lows = np.copy(hyperbox.box_low)
+        new_highs = np.copy(hyperbox.box_hi)
+
+        # Handle the off case
+        new_lows[switch_off] = 0.0
+        new_highs[switch_off] = 0.0
+
+        # Handle the uncertain case
+        new_lows[np.logical_and(switch_q, (hyperbox.box_low > 0))] = 0.0
+        new_highs[np.logical_and(switch_q, (hyperbox.box_hi < 0))] = 0.0
+
+        return Hyperbox.from_twocol(np.stack([new_lows, new_highs]).T)
+
+
+
+
+
+
+

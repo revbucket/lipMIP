@@ -22,18 +22,25 @@ class SplitParameters:
     @classmethod
     def from_dict(cls, dict_input):
         keys = list(dict_input.keys())
-        assert [k in {'num_splits', 'every_x', 'manual_splits'} for k in keys]
-        assert len(keys) == 1
+        assert [k in {'num_splits', 'every_x', 'manual_splits', 'lookback', 
+        			  'lookforward'} 
+        		for k in keys]
+
         return self.__init__(**dict_input)
 
 
-    def __init__(self, num_splits=None, every_x=None, manual_splits=None):
+    def __init__(self, num_splits=None, every_x=None, manual_splits=None, 
+    				   lookback=0, lookahead=0):
         """ Three flavors: 
             - num_splits: split into a fixed number of subnetworks
             - every_x : split into subnetworks with a max number of HIDDEN
                         LAYERS per subnetwork 
             - manual_splits: split into subnetworks where each subnetwork 
                              has a specified number of subnetworks 
+            - lookback: int - how many [Linear, ReLU] units to prepend into 
+            		    each split component. e.g., if 0, the split is a 
+            		    partition. If 1, we prepend each subnet with the 
+            		    [Linear, ReLU] just before it. 
         num_splits : if not None is an int
         every_x : if not None is an int
         manual_split: if not None is a list of ints with the sum being equal
@@ -47,6 +54,8 @@ class SplitParameters:
         if manual_splits is not None:
             self.manual_splits = manual_splits
 
+        self.lookback = lookback
+        self.lookahead = lookahead
 
     def to_dict(self):
         output_dict = {}
@@ -59,7 +68,17 @@ class SplitParameters:
         if self.manual_splits is not None:
             output_dict['manual_splits'] = self.manual_splits
 
+        output_dict['lookahead'] = self.lookahead
+        output_dict['lookback'] = self.lookback
+
         return output_dict
+
+
+    def cast_targets(self, target_units):
+    	if self.lookahead + self.lookback == 0:
+    		return None 
+    	else: 
+    		return target_units
 
 
 # ===========================================================
@@ -70,17 +89,20 @@ class SplitParameters:
 """
 FLESHING THIS OUT:
 - want a function to split problems into multiple subproblems
-	+ input: network, splitParameters, solveParameters (when we do that)
-	+ output: number of subproblems, each associated with a 
-		where each subproblem has a (squire, model, preacts)
+	+ input: standard lipschitz problem + split parameters	
+	+ output: number of subproblems, where each is a LipProblem
+
+
 """
 
+
+
 class SplitLiPProblem:
-	def __init__(self, network, lip_params, split_params):
-		self.network = network
-		self.lip_params = lip_params
+	def __init__(self, lip_prob, split_params, lookforward=0, lookback=0):
+		self.lip_prob = lip_prob
 		self.split_params = split_params
 		self.subproblems = self._make_subproblems()
+
 
 	def _make_subproblems(self):
 		""" Makes LipProblem objects for splitting, based on how we split 
@@ -89,20 +111,25 @@ class SplitLiPProblem:
 			 ii) create LipParam objects with new domains reflected
 			iii) create new LipParams->LipProblems
 		"""
-		#   i)
+		#   i) Collect subnetworks (+ target units)
 		subnetworks = self.network.make_subnetworks(self.split_params)
 
-		#  ii)
-		preact = PreactivationBounds.naive_ia_from_hyperbox(self.lip_params.domain)
-		lip_paramses = []
-		for bound in self.bound_iter:
-			new_domain = Hyperbox.from_twocol(bound)
-			new_lip_Params = LipParameters.change_domain(new_domain)
-			lip_paramses.append(new_lip_Params)
+		# ii) Collect the right constructor arguments 
+		# Need to do this with the preacts, domains, c_vectors
 
-		# iii)
-		return [LipProblem(subnet, param) for (subnet, param) in
-				zip(subnetworks, lip_paramses)]
+
+		preacts = []
+		domains = []
+		c_vecs = []
+
+		# iii) Make the subproblems
+		lip_problems = []
+		for subnet, domain, c_vec in zip(preacts, domains, c_vecs):
+			lip_prob = self.LipProblem.change_attrs(network=subnet,
+												    domain=domain,
+												    c_vector=c_vec)
+		lip_problems.append(lip_prob)
+		return lip_problems
 
 
 	def upper_bound_lipschitz(self, answer_only=False):
