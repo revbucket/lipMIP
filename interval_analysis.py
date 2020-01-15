@@ -98,8 +98,10 @@ class HBoxIA(object):
 		# Returns the possible configurations of the i^th RELU
 		return self.forward_switches[i]
 
-	def get_backward_box(self, i):
+	def get_backward_box(self, i, forward_idx=False):
 		# Returns the input range to the i^th SWITCH
+		if forward_idx:
+			i = self.idx_flip(i)
 		return self.backward_boxes[i]
 
 
@@ -273,10 +275,10 @@ class HBoxIA(object):
 			linear_out is a superset of input_hbox mapped through any 
 					   valid switch in switch_box, and the transpose of the 
 					   linear layer 
-			switch_out is a superset of the inputs in input_hbox mapped 
+			switch_out is a superset of the inputs in input_hbox mapped
 					   by any valid switch combo in switch_box
 		"""
-		linear, _ = hidden_unit 
+		linear, _ = hidden_unit
 		switch_out = switch_box.map_switch(input_hbox)
 		linear_out = switch_out.map_linear(linear, forward=False)
 		return (linear_out, switch_out)

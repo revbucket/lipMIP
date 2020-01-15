@@ -98,8 +98,11 @@ class LipProblem(utils.ParameterObject):
 	- verbose: prints Gurobi outputs if True
 	- timeout: stops early (will replace with stopping criteria later)
 	"""
+
+	VALID_PREACTS = ['naive_ia'] # add improved_ia, LP
+
 	def __init__(self, network, domain, c_vector, lp='linf', 
-				 preact='ia', verbose=False, 
+				 preact='naive_ia', verbose=False, 
 				 timeout=None):
 		init_kwargs = {k: v for k, v in locals().items()
    					   if k not in ['self', '__class__']}
@@ -116,13 +119,22 @@ class LipProblem(utils.ParameterObject):
 		"""
 		network = self.network
 		assert self.lp == 'linf' # Meaning we want max ||grad(f)||_1
-		assert self.preact_method  in ['ia'] # add full_lp later
+		assert (self.preact in self.VALID_PREACTS or
+				isinstance(self.preact, HBoxIA))
 
-		start = time.time()
-		squire, model, preacts = build_gurobi_model(network, self.domain, 
-											self.lp, self.c_vector,
-   									        preact=self.preact,
-									        verbose=self.verbose)
+		timer = utils.Timer()
+		# Step 1: Build the pre-ReLU and pre-switch hyperboxes
+		if not isinstance(self.preact, HBoxIA):
+			pre_bounds = HBoxIA(self.network, self.domain, self.c_vector)
+			pre_bounds.compute_forward(technique=self.preact)
+			pre_bounds.compute_backward(technique=self.preact)
+		else:
+			pre_bounds = self.preact
+
+		squire, model, preacts = build_gurobi_model(network, pre_bounds,
+													self.lp, 
+													verbose=self.verbose)
+
 
 		if params.timeout is not None:
 			model.setParam('TimeLimit', params.timeout)
@@ -131,12 +143,12 @@ class LipProblem(utils.ParameterObject):
 		if model.Status == 3:
 			print("INFEASIBLE")
 
-		end = time.time()
+		runtime = timer.stop()
 		x_vars = squire.get_vars('x')
 		value = model.getObjective().getValue()
 		best_x = np.array([v.X for v in x_vars])
 		result = LipMIPResult(network, params.c_vector, value=value, model=model,
-							  runtime=(end - start), preacts=preacts,
+							  runtime=runtime, preacts=preacts,
 							  best_x=best_x, domain=params.domain, squire=squire)
 		return result
 
@@ -145,7 +157,7 @@ class LipProblem(utils.ParameterObject):
 
 
 # ==============================================================
-# =           Evaluation and Result Object                     =
+# =         Result Object                                      =
 # ==============================================================
 
 class LipMIPResult:
@@ -187,133 +199,6 @@ class LipMIPResult:
 			delattr(self, del_el)
 
 
-class EvaluationParameters(utils.ParameterObject):
-	def __init__(self, hypercube_kwargs=None, radius_kwargs=None,
-				 data_eval_kwargs=None, num_random_eval_kwargs=None,
-				 max_lipschitz_kwargs=None):
-		""" Stores parameters for evaluation objects """
-		super(EvaluationParameters, self).__init__(**kwargs)
-
-	def __call__(self, network, c_vector, data_iter=None):
-
-		eval_obj = LipMIPEvaluation(network, c_vector)
-		# Set up eval objects for each case of evaluation
-
-		# Random evaluations
-		if num_random_eval is not None:
-			eval_obj.do_random_evals()
-
-		# Hypercube evaluation
-
-
-		# Large radius evaluation 
-
-
-		# Data evaluation
-
-
-
-		return 
-
-
-class LipMIPEvaluation:
-	""" Handy object to run evaluations of lipschitz constants of a 
-		neural net -- with a fixed c_vector
-	"""
-	def __init__(self, network, c_vector):
-		self.network = network
-		self.c_vector
-		self.unit_hypercube_eval = None
-		self.large_radius_eval = None
-		self.data_eval = []
-		self.random_eval = []
-
-	def do_random_evals(self, num_random_points, sample_domain, ball_factory, 
-						max_lipschitz_kwargs=None):
-		""" Generates several random points from the domain 
-			and stores (space-minimized) in the random_evals attribute 
-		ARGS:
-			num_random_points: int - number of random points to try 
-			sample_domain: Hyperbox object - domain to sample from 
-			ball_factory: LinfBallFactory object - object to generate 
-						  hyperboxes 
-			max_lipschitz_kwargs: None or dict - contains kwargs to pass 
-								  to the compute_max_lipschitz fxn.
-		RETURNS:
-			None, but appends the results to the 'random_eval' list
-		"""
-		max_lipschitz_kwargs = max_lipschitz_kwargs or {}
-		random_points = sample_domain.random_point(num_random_points)
-		for random_point in random_points:
-			domain = ball_factory(random_point)
-			result = compute_max_lipschitz(self.network, domain, 'linf', 
-										   self.c_vector, **max_lipschitz_kwargs)
-			self.random_eval.append(result)
-
-
-	def do_unit_hypercube_eval(self, max_lipschitz_kwargs=None, 
-							   force_recompute=False):
-		""" Do evaluation over the entire [0,1] hyperbox """
-		if self.unit_hypercube_eval is not None and force_recompute is False:
-			return
-
-		max_lipschitz_kwargs = max_lipschitz_kwargs or {}
-		cube = Hyperbox.build_unit_hypercube(self.network.layer_size[0])
-		result = compute_max_lipschitz(self.network, domain, 'linf', 
-									   self.c_vector, **max_lipschitz_kwargs)
-		self.unit_hypercube_eval = result
-
-
-	def do_large_radius_eval(self, r, max_lipschitz_kwargs=None, 
-							 force_recompute=False):
-		""" Does evaluation of lipschitz constant of a super-large 
-			radius 
-		"""
-		if force_recompute is False and self.large_radius_eval is not None:
-			return 
-
-		max_lipschitz_kwargs = max_lipschitz_kwargs or {}
-		dim = self.network.layer_sizes[0]
-		cube = Hyperbox.build_linf_ball(np.zeros(dim), r)
-		result = compute_max_lipschitz(self.network, domain, 'linf', 
-									   self.c_vector, **max_lipschitz_kwargs)
-		self.large_radius_eval = result
-
-	def do_data_evals(self, data_points, ball_factory, 
-					  label=None, max_lipschitz_kwargs=None, 
-					  force_unique=True):
-		""" Given a bunch of data points, we build balls around them 
-			and compute lipschitz constants for all of them
-		ARGS:
-			data_points: tensor or np.ndarray - data points to compute lip for 
-						 (these are assumed to be unique)
-			ball_factory: LinfBallFactory object - object to generate hyperboxes
-			label: None or str - label to attach to each point to trust
-			max_lipschitz_kwargs : None or dict - kwargs to pass to 
-								   compute_max_lipschitz fxn
-			force_unique : bool - if True we only compute lipschitz constants 
-						   for elements that are not really really close to 
-						   things we've already computed.
-		RETURNS:
-			None, but appends to self.data_eval list
-		"""
-		dim = ball_factory.dimension
-		data_points = utils.as_numpy(data_points).reshape((-1, dim))
-
-		if force_unique:
-			TOLERANCE = 1e-6
-			extant_points = [_.domain.center for _ in self.data_eval]
-			unique = lambda p: not any([np.linalg.norm(p -_) < TOLERANCE
-										for _ in extant_points])
-			data_points = [p for p in data_points if unique(p)]
-
-		for p in data_points:
-			hbox = ball_factory(p)
-			result = compute_max_lipschitz(self.network, hbox, 'linf', 
-										   self.c_vector, **max_lipschitz_kwargs)
-			if label is not None:
-				result.attach_label(label)
-			self.data_eval.append(result)
 
 
 
@@ -322,10 +207,12 @@ class LipMIPEvaluation:
 # ==============================================================
 
 class GurobiSquire():
-	def __init__(self, model):
+	def __init__(self, model, pre_bounds=None):
 		self.var_dict = {}
 		self.model = model
-		self.preact_object = None
+		self.pre_bounds = pre_bounds
+
+	# -----------  Variable Getter/Setters  -----------
 
 	def get_vars(self, name):
 		return self.var_dict[name]
@@ -333,22 +220,32 @@ class GurobiSquire():
 	def set_vars(self, name, var_list):
 		self.var_dict[name] = var_list
 
-	def get_ith_relu_range(self, i, output='twocol'):
-		""" Returns the range of feasible inputs to the  
-		"""
-
-	def set_preact_object(self, preact_object):
-		self.preact_object = preact_object
-
-	def get_preact_bounds(self, i, two_col=True):
-		return self.preact_object.get_ith_layer_bounds(i, two_col)
-
-	def get_backprop_bounds(self, i, two_col=True):
-		return self.preact_object.get_ith_layer_backprop_bounds(i, two_col)
-
 	def var_lengths(self):
+		# Debug tool
 		len_dict = {k: len(v) for k, v in self.var_dict.items()}
 		pprint.pprint(len_dict)
+
+	# -----------  Pre-bound getter/setters  -----------
+
+	def set_pre_bounds(self, pre_bounds):
+		self.pre_bounds = pre_bounds
+
+	def get_ith_relu_box(self, i):
+		# Returns Hyperbox bounding inputs to i^th relu layer
+		return self.pre_bounds.get_forward_box(i)
+
+	def get_ith_switch_box(self, i):
+		# Returns BooleanHyperbox bounding values of i^th relu's int vars
+		return self.pre_bounds.get_forward_switch(i)
+
+	def get_ith_backward_box(self, i):
+		# Returns Hyperbox bounding inputs to i^th (forward index!) backswitch
+		return self.pre_bounds.get_backward_box(i, forward_idx=True)
+
+	# -----------  Other auxiliary methods   -----------
+
+	def update(self):
+		self.model.update()
 
 	def clone(self):
 		""" Makes a copy of this object, but not a deepcopy:
@@ -443,40 +340,30 @@ class GurobiSquire():
 		return model_clone
 
 
-def build_gurobi_model(network, domain, c_vector, lp, 
-					   preact='ia', verbose=False):
+def build_gurobi_model(network, pre_bounds, lp, verbose=False):
 
 	# -- hush mode
 	with utils.silent(): # ain't nobody tryna hear about your gurobi license
 		model = gb.Model()	
-	squire = GurobiSquire(model)
 	if not verbose:
-		model.setParam('OutputFlag', False)
+		model.setParam('OutputFlag', False)		
 
-	# -- Compute the preactivation bounds
-	if isinstance(c_vector, Domain):
-		# Safety check: if c_vector is 'free', 
-		# then preacts must be presupplied		
-		assert isinstance(preact, PreactivationBounds)
-	preact_object = PreactivationBounds.preact_constructor(preact, 
-													network, domain)
-	preact_object.backprop_bounds(c_vector) # will do nothing if already computed
-	squire.set_preact_object(preact_object)
+
+	squire = GurobiSquire(model, pre_bounds=pre_bounds)
 
 
 	# -- Actually build the gurobi model now
-	build_input_constraints(network, model, squire, domain, 'x')
-	build_forward_pass_constraints(network, model, squire)
-	build_back_pass_constraints(network, model, squire, c_vector)
-	build_objective(network, model, squire, lp)
+	build_input_constraints(squire, 'x')
+	build_forward_pass_constraints(network, squire)
+	build_back_pass_constraints(network, squire)
+	build_objective(network, squire, lp)
 	model.update()
 
 	# -- return everything we want
 	return squire, model, preact_object
 
 
-def build_forward_pass_constraints(relunet, gurobi_model,
-								   gurobi_squire):
+def build_forward_pass_constraints(relunet, gurobi_squire):
 
 	for i, fc_layer in enumerate(relunet.fcs[:-1]):
 		if i == 0:
@@ -487,13 +374,10 @@ def build_forward_pass_constraints(relunet, gurobi_model,
 		pre_relu_name = 'fc_%s_pre' % (i + 1)
 		post_relu_name = 'fc_%s_post' % (i + 1)
 		relu_name = 'relu_%s' % (i+ 1)
-		add_linear_layer_mip(relunet, i, gurobi_model,
-							 gurobi_squire, input_name, pre_relu_name)
-		add_relu_layer_mip(relunet, i, gurobi_model, gurobi_squire,
+		add_linear_layer_mip(relunet, i, gurobi_squire, 
+							 input_name, pre_relu_name)
+		add_relu_layer_mip(relunet, i, gurobi_squire,
 						   pre_relu_name, relu_name, post_relu_name)
-		if first_k is not None and i >= first_k:
-			gurobi_model.update()
-			return
 
 	if isinstance(relunet.fcs[-1], nn.Linear):
 		output_var_name = 'logits'
@@ -502,9 +386,7 @@ def build_forward_pass_constraints(relunet, gurobi_model,
 	gurobi_model.update()
 
 
-def build_back_pass_constraints(relunet, gurobi_model,
-								gurobi_squire, c_vector):
-
+def build_back_pass_constraints(relunet, gurobi_squire):
 	""" For relunet like f(x) = c R_l-1(L_l-1 ... R0(L0x))
 		which has l units of Linear->ReLu
 		and we only want to encode backprop up to (and including) 
@@ -529,27 +411,23 @@ def build_back_pass_constraints(relunet, gurobi_model,
 		switch_out_key = 'bp_%s_postswitch' % i
 		relu_key = 'relu_%s' % i
 		if i == relunet.num_relus:
-			add_first_backprop_layer(relunet, gurobi_model, gurobi_squire,
-									 linear_out_key, c_vector,
-									 logit_constraints=logit_constraints)
-		else:    
-			add_backprop_linear_layer(relunet, i, gurobi_model,
-									  gurobi_squire, linear_in_key,
-									  linear_out_key)
-		add_backprop_switch_layer_mip(relunet, i, gurobi_model,
-									  gurobi_squire, linear_out_key,
-									  relu_key, switch_out_key)
+			add_first_backprop_layer(relunet, gurobi_squire,
+									 'c_vector', linear_out_key)
+		else:
+			add_backprop_linear_layer(relunet, i, gurobi_squire,
+									  linear_in_key, linear_out_key)
+		add_backprop_switch_layer_mip(relunet, i, gurobi_squire,
+									  linear_out_key, relu_key, switch_out_key)
 		# TODO: ENCODE DIRECTION VECTOR TO IMPLICITLY TAKE NORMS
 
 	# And the final layer
 	final_output_key ='gradient'
-	add_backprop_linear_layer(relunet, stop_idx, gurobi_model, gurobi_squire,
+	add_backprop_linear_layer(relunet, stop_idx, gurobi_squire,
 							  switch_out_key, final_output_key)
 	gurobi_model.update()
 
 
-def build_objective(relunet, gurobi_model,
-					gurobi_squire, lp):
+def build_objective(relunet, gurobi_squire, lp):
 	gradient_key = 'gradient'
 	if lp == 'linf':
 		abs_sign_key = 'abs_sign'
@@ -568,10 +446,12 @@ def build_objective(relunet, gurobi_model,
 # =                       LAYERWISE HELPERS                               =
 # =========================================================================
 
-def build_input_constraints(network, model, squire, domain, var_key):
+def build_input_constraints(squire, var_key):
 
 	# If domain is a hyperbox, can cover with lb/ub in var constructor
 	var_namer = utils.build_var_namer(var_key)
+	model = squire.model
+	input_domain = squire.pre_bounds.input_domain
 	input_vars = []
 	if isinstance(domain, Hyperbox):
 		box_low, box_hi = domain.box_low, domain.box_hi
@@ -585,8 +465,9 @@ def build_input_constraints(network, model, squire, domain, var_key):
 
 
 
-def add_linear_layer_mip(network, layer_no, model, squire,
+def add_linear_layer_mip(network, layer_no, squire,
 						 input_key, output_key):
+	model = squire.model
 	fc_layer = network.fcs[layer_no]
 	fc_weight =  utils.as_numpy(fc_layer.weight)
 	if network.bias:
@@ -605,14 +486,13 @@ def add_linear_layer_mip(network, layer_no, model, squire,
 	return
 
 
-def add_relu_layer_mip(network, layer_no, model, squire, input_key,
+def add_relu_layer_mip(network, layer_no, squire, input_key,
 					   sign_key, output_key):
 	post_relu_vars = []
 	relu_vars = {} # keyed by neuron # (int)
 	post_relu_namer = utils.build_var_namer(output_key)
 	relu_namer = utils.build_var_namer(sign_key)
-	preact_bounds = squire.get_preact_bounds(layer_no, two_col=True)
-
+	input_box = squire.get_ith_relu_box(layer_no)
 	for i, (low, high) in enumerate(preact_bounds):
 		post_relu_name = post_relu_namer(i)
 		relu_name = relu_namer(i)
@@ -647,32 +527,30 @@ def add_relu_layer_mip(network, layer_no, model, squire, input_key,
 	squire.var_dict[sign_key] = relu_vars
 
 
-def add_first_backprop_layer(network, model, squire, output_key, c_vector):
+def add_first_backprop_layer(network, squire, input_key, output_key):
 	""" Encodes the backprop of the first linear layer.
 		All the variables will be constant, and dependent upon the
 		c_vector
 	"""
-	if not utils.arraylike(c_vector):
-		assert isinstance(c_vector, Domain)
-
 	output_vars = []
 	output_var_namer = utils.build_var_namer(output_key)
+	backprop_vars = squire.pre_bounds.backprop_domain.encode_as_gurobi_model()
+
+	output_vars.append(model.addVar(lb=-gb.GRB.INFINITY, ub=gb.GRB.INFINITY,
+									name=output_var_namer(i)))
+	squire.set_vars(output_key, output_vars)
+
 	if isinstance(network.fcs[-1], nn.Linear):
-		weight = utils.as_numpy(network.fcs[-1].weight)
-		dotted = utils.as_numpy(c_vector).dot(weight)
-		for i, el in enumerate(dotted):
-			output_vars.append(model.addVar(lb=el, ub=el,
-							   name=output_var_namer(i)))
-		squire.set_vars(output_key, output_vars)
+		weight = utils.as_numpy(network.fcs[-1].weight).T
+		for i in range(len(output_vars)):
+			model.addConstr(output_vars[i] == LinExpr(backprop_vars, weight[i]))
+
 	elif isinstance(network.fcs[-1], nn.Identity):
 		# Just add v_i = v_i^+ - v_i^- constraints
 		# for v_i^+, v_i^- in range [0.0, 1.0]
-		c_vector.encode_as_gurobi_model(squire, output_key, 
-										network.fcs[-2].out_features)
-
-
+		for i in range(len(output_vars)):
+			model.addConstr(output_vars[i] == backprop_vars[i])
 	model.update()
-
 
 
 def add_backprop_linear_layer(network, layer_no, model, squire,
@@ -683,10 +561,9 @@ def add_backprop_linear_layer(network, layer_no, model, squire,
 	fc_layer = network.fcs[layer_no]
 	fc_weight = utils.as_numpy(fc_layer.weight)
 
-	backprop_bounds = squire.get_backprop_bounds(layer_no)
+	backprop_bounds = squire.get_ith_backward_box(layer_no)
 	input_vars = squire.get_vars(input_key)
 	for i in range(fc_layer.in_features):
-
 		output_var = model.addVar(lb=backprop_bounds[i][0],
 								  ub=backprop_bounds[i][1],
 								  name=output_var_namer(i))
@@ -698,7 +575,7 @@ def add_backprop_linear_layer(network, layer_no, model, squire,
 
 
 
-def add_backprop_switch_layer_mip(network, layer_no, model, squire,
+def add_backprop_switch_layer_mip(network, layer_no, squire,
     							  input_key, relu_key, output_key):
 	"""
 	Encodes the funtion
@@ -706,58 +583,65 @@ def add_backprop_switch_layer_mip(network, layer_no, model, squire,
 				     input_key[i] if sign_key != 0
 	where 0 <= input_key[i] <= squire.backprop_pos_bounds[i]
 	"""
+	raise RefactorError # CLEAN UP SWITCH FUNCTION CASES
+	switchbox = squire.get_ith_switch_box(layer_no)	
+	switch_inbox = squire.get_ith_backward_box(layer_no)
 	post_switch_vars = []
 	post_switch_namer = utils.build_var_namer(output_key)
-	preact_bounds = squire.get_preact_bounds(layer_no - 1)
-	backprop_bounds = squire.get_backprop_bounds(layer_no)
-	pre_switch_vars = squire.get_vars(input_key)
-	relu_vars = squire.get_vars(relu_key) # binary variables
-	for i, (low, high) in enumerate(preact_bounds):
-		post_switch_name = post_switch_namer(i)
-		pre_switch_var = pre_switch_vars[i]
-		backprop_lo, backprop_hi = backprop_bounds[i]
-		# Handle corner cases where no relu_var exists
 
-		if high <= 0:
-			# In this case, the relu is always off
-			post_switch_var = model.addVar(lb=0.0, ub=0.0,
-										   name=post_switch_name)
-		elif low >= 0:
-			# In this case the relu is always on 
-			post_switch_var = model.addVar(lb=backprop_lo, ub=backprop_hi,
-										   name=post_switch_name)
+	# First add variables
+	for idx, val in enumerate(switchbox):
+		post_switch_name = post_relu_namer(idx)
+		if val < 0:
+			lb = ub = 0.0 
+
+		elif val > 0:
+			# Switch is always on
+			lb, ub = switch_inbox[idx]
+		else:
+			lb = min([0, switch_inbox[idx][0]])
+			ub = max([0, switch_inbox[idx][1]])
+		post_switch_vars.append(model.addVar(lb=lb, ub=ub, name=name))
+	squire.set_vars(output_key, post_switch_vars)		
+
+
+	# And then add constraints
+	relu_vars = squire.get_vars(relu_key)
+	for idx, val in enumerate(switchbox):
+		relu_var 		= relu_vars[idx]
+		pre_switch_var  = pre_switch_vars[i]		
+		post_switch_var = post_switch_vars
+		if val < 0:
+			continue
+		elif val > 0:
 			model.addConstr(post_switch_var == pre_switch_var)
+			continue
 		else:
 			# In this case, the relu is uncertain and we need to encode 
 			# 4 constraints. This depends on the backprop low or high though
-			relu_var = relu_vars[i]
-			post_switch_var = model.addVar(lb=min([backprop_lo, 0.0]), 
-										   ub=max([backprop_hi, 0.0]),
-										   name=post_switch_name)
+			bp_lo, bp_hi = switch_inbox[idx]
 			if backprop_hi < 0:
-				model.addConstr(post_switch_var >= backprop_lo * relu_var)
+				model.addConstr(post_switch_var >= bp_lo * relu_var)
 				model.addConstr(post_switch_var <= 0)
 				model.addConstr(post_switch_var >= pre_switch_var)
-				model.addConstr(post_switch_var <= pre_switch_var - backprop_lo + 
-												   backprop_lo * relu_var)
+				model.addConstr(post_switch_var <= pre_switch_var - bp + 
+												   bp_lo * relu_var)
 			elif backprop_lo > 0:
 				model.addConstr(post_switch_var >= 0)
-				model.addConstr(post_switch_var <= backprop_hi * relu_var)
+				model.addConstr(post_switch_var <= bp_hi * relu_var)
 				model.addConstr(post_switch_var <= pre_switch_var)
-				model.addConstr(post_switch_var >= pre_switch_var - backprop_hi + 
-												   backprop_hi * relu_var)
+				model.addConstr(post_switch_var >= pre_switch_var - bp_hi + 
+												   bp_hi * relu_var)
 			else:
-				model.addConstr(post_switch_var >= backprop_lo * relu_var) 
-				model.addConstr(post_switch_var <= backprop_hi * relu_var)
-				model.addConstr(post_switch_var >= pre_switch_var - backprop_hi + 
-												   backprop_hi * relu_var)
-				model.addConstr(post_switch_var <= pre_switch_var - backprop_lo + 
-												   backprop_lo * relu_var)				
-				pass
-		post_switch_vars.append(post_switch_var)
+				model.addConstr(post_switch_var >= bp_lo * relu_var) 
+				model.addConstr(post_switch_var <= bp_hi * relu_var)
+				model.addConstr(post_switch_var >= pre_switch_var - bp_hi + 
+												   bp_hi * relu_var)
+				model.addConstr(post_switch_var <= pre_switch_var - bp_lo + 
+												   bp_lo * relu_var)				
 
 	model.update()
-	squire.set_vars(output_key, post_switch_vars)
+
 
 
 

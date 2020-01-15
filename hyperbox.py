@@ -36,9 +36,19 @@ class Hyperbox(Domain):
         self.center = None
         self.radius = None
 
-
         self.box_low = None # ARRAY!
         self.box_hi = None # ARRAY!
+
+        self.is_vector = False
+
+    def __iter__(self):
+        """ Iterates over twocol version of [box_low, box_high] """
+        twocol = self.as_twocol
+        for el in twocol:
+            yield el
+
+    def __get__(self, idx):
+        return (self.box_low[idx], self.box_hi[idx])
 
     # CONSTRUCTOR OVERVIEW: 
     def as_dict(self):
@@ -46,16 +56,17 @@ class Hyperbox(Domain):
                 'center':                   self.center,
                 'radius':                   self.radius,
                 'box_low':                  self.box_low,
-                'box_hi':                   self.box_hi}
-
+                'box_hi':                   self.box_hi,
+                'is_vector':                self.is_vector}
 
 
     @classmethod
     def from_dict(cls, saved_dict):
         domain = cls(saved_dict['dimension'])
-        for s in ['center', 'radius', 'box_low', 'box_hi']:
+        for s in ['center', 'radius', 'box_low', 'box_hi', 'is_vector']:
             setattr(domain, s, saved_dict[s])
         return domain
+
 
     @classmethod
     def from_twocol(cls, twocol):
@@ -101,7 +112,7 @@ class Hyperbox(Domain):
         c = utils.as_numpy(c)
         return cls.from_dict({'center': c, 'radius': 0.0, 
                               'box_low': c, 'box_hi': c,
-                              'dimension': len(c)})
+                              'dimension': len(c), 'is_vector': True})
 
         
     # ==============================================================
@@ -198,6 +209,16 @@ class Hyperbox(Domain):
         """
         return Hyperbox.from_twocol(np.maximum(self.as_twocol(), 0))
 
+    def encode_as_gurobi_model(squire, key, num_elements):
+        model = squire.model 
+        namer = utils.build_var_namer(key)
+        gb_vars = []
+        for i, (lb, ub) in self:
+            gb_vars.append(model.addVar(lb=lb, ub=ub, name=pos_namer(i)))
+        squire.set_vars(key, gb_vars)
+        squire.update()
+        return gb_vars
+
 
     # ==========================================================================
     # =           Helper methods                                               =
@@ -258,6 +279,13 @@ class BooleanHyperbox:
         """
         self.values = utils.as_numpy(values).astype(np.int8)
         self.dimension = len(self.values)
+
+    def __get__(self, idx):
+        return self.values[idx]
+
+    def __iter__(self):
+        for value in self.values:
+            yield value
 
     def map_switch(self, hyperbox):
         """ Maps a hyperbox through elementwise switch operators
