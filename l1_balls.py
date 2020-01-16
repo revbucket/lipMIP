@@ -18,6 +18,7 @@ class L1Ball(object):
 	def __init__(self, center, radius):
 		self.center = center 
 		self.radius = radius
+		self.dimension = len(center)
 
 	@classmethod
 	def make_unit_ball(dimension):
@@ -25,7 +26,7 @@ class L1Ball(object):
 		return L1Ball(np.zeros(dimension), 1.0)
 
 
-	def encode_as_gurobi_model(squire, key, num_elements):		
+	def encode_as_gurobi_model(self, squire, key):		
 		model = squire.model
 		pos_name = key + '_pos'
 		neg_name = key + '_neg'
@@ -37,7 +38,7 @@ class L1Ball(object):
 		key_vars, pos_vars, neg_vars = [], [], []
 
 		# Add all the variables and constraints
-		for i in range(num_elements):
+		for i in range(self.dimension):
 			pos_vars.append(model.addVar(lb=0.0, ub=1.0, name=pos_namer(i)))
 			neg_vars.append(model.addVar(lb=0.0, ub=1.0, name=neg_namer(i)))			
 			key_vars.append(model.addVar(lb=-1.0, ub=1.0, name=key_namer(i)))

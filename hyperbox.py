@@ -43,11 +43,10 @@ class Hyperbox(Domain):
 
     def __iter__(self):
         """ Iterates over twocol version of [box_low, box_high] """
-        twocol = self.as_twocol
-        for el in twocol:
+        for el in self.as_twocol():
             yield el
 
-    def __get__(self, idx):
+    def __getitem__(self, idx):
         return (self.box_low[idx], self.box_hi[idx])
 
     # CONSTRUCTOR OVERVIEW: 
@@ -85,7 +84,8 @@ class Hyperbox(Domain):
                                    'center': center, 
                                    'radius': radius, 
                                    'box_low': twocol[:, 0], 
-                                   'box_hi':  twocol[:, 1]})
+                                   'box_hi':  twocol[:, 1],
+                                   'is_vector': False})
 
 
     @classmethod 
@@ -209,16 +209,22 @@ class Hyperbox(Domain):
         """
         return Hyperbox.from_twocol(np.maximum(self.as_twocol(), 0))
 
-    def encode_as_gurobi_model(squire, key, num_elements):
+    def encode_as_gurobi_model(self, squire, key):
         model = squire.model 
         namer = utils.build_var_namer(key)
         gb_vars = []
-        for i, (lb, ub) in self:
-            gb_vars.append(model.addVar(lb=lb, ub=ub, name=pos_namer(i)))
+        for i, (lb, ub) in enumerate(self):
+            gb_vars.append(model.addVar(lb=lb, ub=ub, name=namer(i)))
         squire.set_vars(key, gb_vars)
         squire.update()
         return gb_vars
 
+    def contains(self, point):
+        """ Returns True if the provided point is in the hyperbox """
+        point = utils.as_numpy(point)
+        assert len(point) == self.dimension
+        return all([lo_i <= point_i <= hi_i for (point_i, (lo_i, hi_i)) in 
+                    zip(point, self)])
 
     # ==========================================================================
     # =           Helper methods                                               =
@@ -280,7 +286,7 @@ class BooleanHyperbox:
         self.values = utils.as_numpy(values).astype(np.int8)
         self.dimension = len(self.values)
 
-    def __get__(self, idx):
+    def __getitem__(self, idx):
         return self.values[idx]
 
     def __iter__(self):

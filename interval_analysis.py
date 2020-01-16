@@ -110,7 +110,7 @@ class HBoxIA(object):
 		""" Takes either the forward indices and makes them backward indices
 			or vice versa 
 		"""
-		return self.network.num_relus - i - 1
+		return self.network.num_relus - i
 
 
 	def slice_from_subnet(self, subnetwork):
