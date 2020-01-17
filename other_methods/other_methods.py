@@ -1,4 +1,5 @@
 """ Generic "Other Method" result object """
+import inspect
 
 
 class OtherResult:

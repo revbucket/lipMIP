@@ -11,20 +11,19 @@ class LipLP(OtherResult):
         assert primal_norm != 'l2'
         super(LipLP, self).__init__(network, c_vector, domain, primal_norm)
 
-    def compute(self, preact_method='ia', tighter_relu=False):
+    def compute(self, preact_method='naive_ia', tighter_relu=False):
         timer = utils.Timer()
 
         # Use the GurobiSquire / model constuctor in lipMIP file
-        squire, _, _ = lm.build_gurobi_model(self.network, self.domain,
-                                             self.primal_norm, self.c_vector,
-                                             preact_method=preact_method)
+        lip_prob = lm.LipProblem(self.network, self.domain, self.c_vector,
+                                 lp=self.primal_norm, preact=preact_method)
+        squire, timer = lip_prob.build_gurobi_squire()
 
         # And then we'll just change any binary variables to continous ones:
         model = squire.lp_ify_model(tighter_relu=tighter_relu)
-
         # And optimize
         model.optimize()
-        if model.Status == 3:
+        if model.Status in [3, 4]:
             print('INFEASIBLE')
         self.value = model.getObjective().getValue()
         self.compute_time = timer.stop()

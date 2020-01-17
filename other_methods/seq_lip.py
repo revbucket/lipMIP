@@ -7,6 +7,7 @@ from .other_methods import OtherResult
 import other_methods.lipEstimation.seqlip as sl
 import utilities as utils
 import torch
+import numpy as np
 
 class SeqLip(OtherResult):
 
@@ -27,7 +28,9 @@ class SeqLip(OtherResult):
         for linear_layer in self.network.fcs:
             if (linear_layer == self.network.fcs[-1] and 
                 self.c_vector is not None):
-                weight = self.c_vector.view(1, -1) @ linear_layer.weight
+                c_vec = torch.tensor(self.c_vector).view(1, -1)
+                c_vec = c_vec.type(self.network.dtype)
+                weight = c_vec @ linear_layer.weight
             else:
                 weight = linear_layer.weight
             svds.append(torch.svd(weight))
@@ -51,7 +54,10 @@ class SeqLip(OtherResult):
             subproblems.append(((sigma_ip1 @ v_ip1.t()).data,
                                 (u_i @ sigma_i).data))
         # And solve each of the subproblems:
-        lips = [sl.optim_nn_pca_greedy(*_, verbose=False, use_tqdm=False)[0]
+        dual_norm = {'linf': 1, 'l2': 2, 'l1': np.inf}[self.primal_norm]
+
+        lips = [sl.optim_nn_pca_greedy(*_, verbose=False, use_tqdm=False,
+                                       norm_ord=dual_norm)[0]
                 for _ in subproblems]
         self.value = utils.prod(lips)
         self.compute_time = timer.stop()

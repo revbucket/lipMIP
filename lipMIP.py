@@ -35,39 +35,6 @@ import torch.nn as nn
 # =           MAIN SOLVER BLOCK                         =
 # =======================================================
 
-class LipParameters(utils.ParameterObject):
-	"""
-	Holds SOME parameters for LipMIP computation. Does not hold ALL the 
-	parameters, but holds some so we are a little cleaner for some 
-
-	- c_vector: network has output that is a vector, so this means we 
-				care about the function <c, f(.)> 
-	- lp : primal Norm we care about. e.g., for
-		   |<c, f(x)- f(y)>| <= L ||x-y||
-			lp refers to             ^this norm
-	- preact_method: which abstraction pushforward operators we'll use to 
-					 generate pre-relu bounds and pre-switch bounds.
-					 'ia' := interval analysis 
-	- verbose: prints Gurobi outputs if True
-	- timeout: stops early (will replace with stopping criteria later)
-
-	"""
-	def __init__(self, domain, c_vector, lp='linf', preact_method='ia',
-				 verbose=False, timeout=None):
-		init_args = {k: v for k, v in locals().items() 
-					 if k not in ['self', '__class__']}
-		super(LipParameters, self).__init__(**init_args)
-
-
-	def change_domain(self, new_domain):
-		return self.change_attrs(**{'domain': new_domain})
-
-
-	def change_c_vector(self, new_c_vector):
-		return self.change_attrs(**{'c_vector': new_c_vector})
-
-
-
 class LipProblem(utils.ParameterObject):
 	""" Object that holds ALL the parameters for a lipschitz 
 		problem, but doesn't solve it until we tell it to.
@@ -102,24 +69,24 @@ class LipProblem(utils.ParameterObject):
 
 	VALID_PREACTS = ['naive_ia'] # add improved_ia, LP
 
-	def __init__(self, network, domain, c_vector, lp='linf', 
+	def __init__(self, network, domain, c_vector, primal_norm='linf', 
 				 preact='naive_ia', verbose=False, 
-				 timeout=None, mip_gap=None):
+				 timeout=None, mip_gap=None, num_threads=None):
 		init_kwargs = {k: v for k, v in locals().items()
    					   if k not in ['self', '__class__']}
+
 		super(LipProblem, self).__init__(**init_kwargs)
+		self.result = None
 
+	def _self_attach_result(self, result):
+		self.result = result
+		self.value = result.value 
+		self.compute_time = result.runtime
 
-
-	def compute_max_lipschitz(self):
-		""" Computes the maximum lipschitz constant with a fixed
-			domain already set.
-
-			Returns the maximum lipschitz constant and the point that
-			attains it
-		"""
+	def build_gurobi_squire(self):
+		""" Builds the gurobi squire """
 		network = self.network
-		assert self.lp == 'linf' # Meaning we want max ||grad(f)||_1
+		assert self.primal_norm in ['linf', 'l1'] # Meaning we want max ||grad(f)||_*
 		assert (self.preact in self.VALID_PREACTS or
 				isinstance(self.preact, HBoxIA))
 
@@ -131,14 +98,27 @@ class LipProblem(utils.ParameterObject):
 			pre_bounds.compute_backward(technique=self.preact)
 		else:
 			pre_bounds = self.preact
-		squire, model = build_gurobi_model(network, pre_bounds, self.lp,
-										   verbose=self.verbose)
+		squire = build_gurobi_model(network, pre_bounds, self.primal_norm,
+								   verbose=self.verbose)
 
+		return squire, timer
+
+	def compute_max_lipschitz(self):
+		""" Computes the maximum lipschitz constant with a fixed
+			domain already set.
+
+			Returns the maximum lipschitz constant and the point that
+			attains it
+		"""
+		squire, timer = self.build_gurobi_squire()
+		model = squire.model
 
 		if self.timeout is not None:
-			model.setParam('TimeLimit', params.timeout)
+			model.setParam('TimeLimit', self.timeout)
 		if self.mip_gap is not None:
 			model.setParam('MIPGap', self.mip_gap)
+
+		model.setParam('Threads', getattr(self, 'num_threads') or 4)
 
 		model.optimize()
 		if model.Status in [3, 4]:
@@ -148,11 +128,12 @@ class LipProblem(utils.ParameterObject):
 		x_vars = squire.get_vars('x')
 		value = model.getObjective().getValue()
 		best_x = np.array([v.X for v in x_vars])
-		result = LipMIPResult(network, self.c_vector, value=value, model=model,
-							  runtime=runtime, preacts=pre_bounds,
-							  best_x=best_x, domain=self.domain, squire=squire)
-		return result
+		result = LipResult(self.network, self.c_vector, value=value,
+					       model=model, runtime=runtime, 
+						   preacts=squire.pre_bounds, best_x=best_x, 
+						   domain=self.domain, squire=squire)
 
+		self._self_attach_result(result)
 		# ======  End of MAIN SOLVER BLOCK                =======
 
 
@@ -161,7 +142,7 @@ class LipProblem(utils.ParameterObject):
 # =         Result Object                                      =
 # ==============================================================
 
-class LipMIPResult:
+class LipResult:
 	""" Handy object to store the values of a LipMIP run """
 	ATTRS = set(['network', 'c_vector', 'value', 'squire', 'model',
     			 'runtime', 'preacts', 'best_x', 'domain', 'label'])
@@ -337,7 +318,7 @@ class GurobiSquire():
 			if re.match(relu_regex, key) is None:
 				continue 
 			suffix = key.split('_')[1]
-			bounds = self.get_preact_bounds(int(suffix) - 1, two_col=True)
+			bounds = self.get_ith_relu_box(int(suffix) - 1)
 			pre_relu_namer = utils.build_var_namer('fc_%s_pre' % suffix)
 			post_relu_namer = utils.build_var_namer('fc_%s_post' % suffix)
 			for idx in self.var_dict[key]:
@@ -373,7 +354,7 @@ def build_gurobi_model(network, pre_bounds, lp, verbose=False):
 	model.update()
 
 	# -- return everything we want
-	return squire, model
+	return squire
 
 
 def build_forward_pass_constraints(relunet, gurobi_squire):
@@ -440,15 +421,16 @@ def build_back_pass_constraints(relunet, gurobi_squire):
 
 def build_objective(relunet, gurobi_squire, lp):
 	gradient_key = 'gradient'
+	abs_sign_key = 'abs_sign'
+	abs_grad_key = 'abs_grad'
+	grad_bounds = gurobi_squire.pre_bounds.gradient_range
+	add_abs_layer(relunet, gurobi_squire, grad_bounds,
+				  gradient_key, abs_sign_key, abs_grad_key)	
 	if lp == 'linf':
-		abs_sign_key = 'abs_sign'
-		abs_grad_key = 'abs_grad'
-		grad_bounds = gurobi_squire.pre_bounds.gradient_range
-		add_abs_layer(relunet, gurobi_squire, grad_bounds,
-					  gradient_key, abs_sign_key, abs_grad_key)
 		set_l1_objective(gurobi_squire, abs_grad_key)
+	elif lp == 'l1':
+		set_linf_objective(gurobi_squire, grad_bounds, abs_grad_key, 'abs_max')
 	gurobi_squire.update()
-
 
 # ======  End of Build Gurobi Model for Lipschitz Comp.  =======
 
@@ -601,7 +583,6 @@ def add_backprop_switch_layer_mip(network, layer_no, squire,
 	model = squire.model
 	switchbox = squire.get_ith_switch_box(layer_no - 1)
 	switch_inbox = squire.get_ith_backward_box(layer_no)
-	print(switchbox.values)
 	post_switch_vars = []
 	post_switch_namer = utils.build_var_namer(output_key)
 	post_switch_namer = utils.build_var_namer(output_key)
@@ -701,6 +682,55 @@ def add_abs_layer(network, squire, hyperbox_bounds,
 	squire.set_vars(sign_key, sign_vars)
 
 
+
+def set_linf_objective(squire, box_range, abs_key, maxint_key):
+	""" Sets the objective for the MAX of the abs_keys where 
+		box_range is a hyperbox for the max of these variables before 
+		the absolute value is applied 
+	ARGS:
+		squire: gurobi squire object which holds the model
+		box_range : Hyperbox bounding the values of abs_key variables before 
+					the 
+		abs_key : string that points to the continuous variables that 
+				  represent the absolute value of some other variable
+		maxint_key : string that will refer to the integer variables names
+
+	"""
+	model = squire.model
+	abs_vars = squire.get_vars(abs_key)
+	ubs = np.maximum(box_range.box_hi, abs(box_range.box_low))
+	lbs = np.maximum(box_range.box_low, 0)
+	l_max = max(lbs)
+	relevant_idxs = [_ for _ in range(len(ubs)) if _ >= l_max]
+
+	top_two = sorted(relevant_idxs, key=lambda el: -ubs[el])[:2]
+	max_var = model.addVar(lb=l_max, ub=ubs[top_two[0]])
+	maxint_namer = utils.build_var_namer(maxint_key)
+	maxint_vars = {}
+
+	if len(relevant_idxs) == 1:
+		print("ONLY 1 THING TO MAXIMIZE")
+		model.addConstr(max_var == abs_vars[relevant_idxs[0]])
+		model.setObjective(max_var, gb.GRB.MAXIMIZE)
+		squire.update()
+	else:
+		for idx in relevant_idxs:
+			if idx == top_two[0]:
+				u_max = ubs[top_two[1]]
+			else:
+				u_max = ubs[top_two[0]]
+			maxint_var = model.addVar(lb=0, ub=1, vtype=gb.GRB.BINARY,
+									  name=maxint_namer(idx))
+			maxint_vars[idx] = maxint_var
+			model.addConstr(max_var >= abs_vars[idx])
+			model.addConstr(max_var <= abs_vars[idx] + 
+									   (1 - maxint_var) * (u_max - lbs[idx]))
+		print("MAXINT", list(maxint_vars.values()))
+		model.addConstr(1 == sum(list(maxint_vars.values())))
+
+	model.setObjective(max_var, gb.GRB.MAXIMIZE)
+	squire.set_vars(maxint_key, maxint_vars)
+	squire.update()
 
 
 def set_l1_objective(squire, abs_key):

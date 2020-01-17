@@ -21,7 +21,7 @@ class LinfBallFactory(object):
         self.global_lo = global_lo
         self.global_hi = global_hi
 
-    def make_linf_ball(center):
+    def __call__(self, center):
         return Hyperbox.build_linf_ball(center, self.radius, 
                                         global_lo=self.global_lo,
                                         global_hi=self.global_hi)

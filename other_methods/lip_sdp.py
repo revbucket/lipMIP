@@ -10,10 +10,10 @@ from scipy.io import savemat
 import os
 import matlab.engine
 import secrets
-import time
+
 import math
 
-class LipSDPCustom(OtherResult):
+class LipSDP(OtherResult):
 	# IMPORTANT NOTE: THIS OVERESTIMATES L2 LIPSCHITZ!!!
 	# (need to scale by sqrt(n) to get L1/L_infty)
 	LIPSDP_DIR = os.path.join(os.path.dirname(os.path.realpath(__file__)), 
@@ -44,14 +44,14 @@ class LipSDPCustom(OtherResult):
 
 	def __init__(self, network, c_vector):
 		""" Solves LipSDP for given network/c_vector """
-		super(LipSDPCustom, self).__init__(network, c_vector, None, 'l2')
+		super(LipSDP, self).__init__(network, c_vector, None, 'l2')
 		self.dimension = network.layer_sizes[0]
 
 	def compute(self):
 		""" Takes ReLUNet and casts weights to a temp file so we can 
 			run the Matlab/Mosek SDP solver on these. Kwargs to come 
 		"""
-		timer_start = time.time()
+		timer = utils.Timer()
 		# Collect weights and put them in a temp file
 		weights = self.extract_weights(self.network, self.c_vector)
 		weight_file = secrets.token_hex(24) + '.mat'
@@ -72,6 +72,7 @@ class LipSDPCustom(OtherResult):
 		L = eng.solve_LipSDP(network, lip_params, nargout=1)
 
 
+		self.compute_time = timer.stop()
 		self.value = L
 		os.remove(weight_path)
 		return L

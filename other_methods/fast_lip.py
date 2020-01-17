@@ -8,6 +8,7 @@ import math
 from .other_methods import OtherResult 
 import utilities as utils 
 from pre_activation_bounds import PreactivationBounds
+from interval_analysis import HBoxIA
 
 class FastLip(OtherResult):
 
@@ -17,20 +18,19 @@ class FastLip(OtherResult):
 	def compute(self):
 		# Fast lip is just interval bound propagation through backprop
 		timer = utils.Timer()
-		preacts = PreactivationBounds.naive_ia_from_hyperbox(self.network,
- 														    self.domain)
-		preacts.backprop_bounds(self.c_vector)
+		preacts = HBoxIA(self.network, self.domain, self.c_vector)
+		preacts.compute_forward()
+		preacts.compute_backward()
 
-		backprop_lows = preacts.backprop_lows[0]
-		backprop_highs = preacts.backprop_highs[0]
+		backprop_box = preacts.gradient_range
 
 		# Worst case vector is max([abs(lo), abs(hi)])
-		self.worst_case_vec = np.maximum(abs(backprop_lows), 
-										 abs(backprop_highs))
+		self.worst_case_vec = np.maximum(abs(backprop_box.box_low),
+										 abs(backprop_box.box_hi))
 		# And take dual norm of this
 		dual_norm = {'linf': 1, 'l1': np.inf, 'l2': 2}[self.primal_norm]
 		value = np.linalg.norm(self.worst_case_vec, ord=dual_norm)
 
-		self.value = value 
+		self.value = value
 		self.compute_time = timer.stop()
 		return value
