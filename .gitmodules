@@ -3,7 +3,7 @@
 	url = https://github.com/revbucket/geometric-certificates
 [submodule "other_methods/LipSDP"]
 	path = other_methods/LipSDP
-	url = https://github.com/arobey1/LipSDP
+	url = https://github.com/revbucket/LipSDP
 [submodule "other_methods/lipEstimation"]
 	path = other_methods/lipEstimation
-	url = https://github.com/avirmaux/lipEstimation
+	url = https://github.com/revbucket/lipEstimation
