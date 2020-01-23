@@ -32,12 +32,12 @@ class ParameterObject:
 		return self.__class__(**new_kwargs)
 
 class Factory(ParameterObject):
-	def __init__(self, subclass, **kwargs):
-		self.subclass = subclass
+	def __init__(self, constructor, **kwargs):
+		self.constructor = constructor
 		super(Factory, self).__init__(**kwargs)
 
 	def __call__(self, **kwargs):
-		cons_args = inspect.getfullargspec(self.subclass.__init__).args
+		cons_args = inspect.getfullargspec(self.constructor).args
 		# Make default args from attributes
 		args = {k: getattr(self, k) for k in self.attr_list if k in cons_args}
 
@@ -47,10 +47,10 @@ class Factory(ParameterObject):
 				args[k] = v
 
 		# Build object
-		return self.subclass(**args)
+		return self.constructor(**args)
 
 	def __repr__(self):
-		return '<Factory: %s>' % self.subclass.__name__
+		return '<Factory: %s>' % self.constructor.__self__.__name__
 
 
 

@@ -16,7 +16,7 @@ class LipLP(OtherResult):
 
         # Use the GurobiSquire / model constuctor in lipMIP file
         lip_prob = lm.LipProblem(self.network, self.domain, self.c_vector,
-                                 lp=self.primal_norm, preact=preact_method)
+                                 primal_norm=self.primal_norm, preact=preact_method)
         squire, timer = lip_prob.build_gurobi_squire()
 
         # And then we'll just change any binary variables to continous ones:

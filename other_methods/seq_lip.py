@@ -57,7 +57,7 @@ class SeqLip(OtherResult):
         dual_norm = {'linf': 1, 'l2': 2, 'l1': np.inf}[self.primal_norm]
 
         lips = [sl.optim_nn_pca_greedy(*_, verbose=False, use_tqdm=False,
-                                       norm_ord=dual_norm)[0]
+                                       norm_ord=2)[0]
                 for _ in subproblems]
         self.value = utils.prod(lips)
         self.compute_time = timer.stop()

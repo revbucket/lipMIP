@@ -5,7 +5,6 @@ import utilities as utils
 from hyperbox import Hyperbox
 import numpy as np
 
-
 class Experiment(utils.ParameterObject):
 	""" Will set up factories for a bunch of methods """
 	VALID_CLASSES = om.OTHER_METHODS + [LipProblem]
@@ -53,9 +52,9 @@ class Experiment(utils.ParameterObject):
 		outputs = []
 		random_points = sample_domain.random_point(num_random_points)
 		for random_point in random_points:
-			domain = ball_factory(random_point)
+			domain = ball_factory(x=random_point)
 			outputs.append(self(domain=domain, **kwargs).compute())
-		return outputs
+		return ResultList(outputs)
 
 
 	def do_unit_hypercube_eval(self, **kwargs):
@@ -78,7 +77,7 @@ class Experiment(utils.ParameterObject):
 
 
 	def do_data_evals(self, data_points, ball_factory, 
-					  force_unique=True, **kwargs):
+					  num_random=None, **kwargs):
 		""" Given a bunch of data points, we build balls around them 
 			and compute lipschitz constants for all of them
 		ARGS:
@@ -88,6 +87,8 @@ class Experiment(utils.ParameterObject):
 			label: None or str - label to attach to each point to trust
 			max_lipschitz_kwargs : None or dict - kwargs to pass to 
 								   compute_max_lipschitz fxn
+			num_random: if not None, is int - how many random points we 
+						collect (randomly) from the data points
 			force_unique : bool - if True we only compute lipschitz constants 
 						   for elements that are not really really close to 
 						   things we've already computed.
@@ -95,21 +96,17 @@ class Experiment(utils.ParameterObject):
 			None, but appends to self.data_eval list
 		"""
 		assert 'domain' not in kwargs
-		dimension = self._get_dimension()
+		dim = self._get_dimension()
 
 		data_points = utils.as_numpy(data_points).reshape((-1, dim))
-
-		if force_unique:
-			TOLERANCE = 1e-6
-			extant_points = [_.domain.center for _ in self.data_eval]
-			unique = lambda p: not any([np.linalg.norm(p -_) < TOLERANCE
-										for _ in extant_points])
-			data_points = [p for p in data_points if unique(p)]
+		if num_random is not None and num_random < data_points.shape[0]:
+			idxs = np.random.choice(data_points.shape[0], num_random)
+			data_points = data_points[idxs]
 
 		outputs = []
 		for p in data_points:
-			outputs.append(self(domain=ball_factory(p), **kwargs).compute())
-		return outputs
+			outputs.append(self(domain=ball_factory(x=p), **kwargs).compute())
+		return ResultList(outputs)
 
 
 class InstanceGroup:
@@ -173,3 +170,37 @@ class Result:
 		return self.get_subattr('compute_time', k=k)
 
 
+class ResultList:
+	def __init__(self, results):
+		self.results = results 
+
+	def average_stdevs(self, attr):
+		""" Collects the average and standard deviations by keys in each 
+			input dict
+		ARGS: 
+			attr: string - must be 'value' or 'time'
+		RETURNS:
+			dict like:
+				{k: (mean for k, stdev for k, # k)} for each k in each 
+				input dict
+		"""
+		getter = {'value': lambda r: r.values(), 
+				  'time':  lambda r: r.compute_times()}[attr]
+		# collect set of keys
+		key_list = set()
+		for result in self.results:
+			for k in result.input_dict:
+				key_list.add(k)
+
+		# aggregate data for all keys
+		data_lists = {k: [] for k in key_list}
+		for result in self.results:
+			for k, v in getter(result).items():
+				data_lists[k].append(v)
+
+		get_mean = lambda arr: np.array(arr).mean() 
+		get_stdev = lambda arr: np.array(arr).std()
+		get_count = lambda arr: len(arr)
+
+		return {k: (get_mean(v), get_stdev(v), get_count(v)) 
+				for k,v in data_lists.items()}
