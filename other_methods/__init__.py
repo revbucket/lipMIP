@@ -7,3 +7,5 @@ from .seq_lip import SeqLip
 from .other_methods import OtherResult
 
 OTHER_METHODS = [CLEVER, FastLip, LipLP, LipSDP, NaiveUB, RandomLB, SeqLip]
+LOCAL_METHODS = [CLEVER, FastLip, LipLP, RandomLB]
+GLOBAL_METHODS = [LipSDP, NaiveUB, SeqLip]

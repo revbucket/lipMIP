@@ -8,14 +8,14 @@ import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
 import torch.autograd as autograd
-
+from . import adv_attacks as aa
 import pickle
 from abc import ABC, abstractmethod
 import os
 import sys
 sys.path.append(os.path.join(os.getcwd(),'..'))
 
-from utilities import ParameterObject
+from utilities import ParameterObject, cudafy, cpufy
 
 # ===========================================================================
 # =           General purpose training                                      =
@@ -41,18 +41,48 @@ class TrainParameters(ParameterObject):
 					 if k not in ['self', '__class__']}
 		super(TrainParameters, self).__init__(**init_args)
 
+	def cuda(self):
+		""" If the trainset/valset are lists of tensors, this pushes them 
+			to cuda
+		"""
+		for attr in 'trainset', 'valset':
+			if isinstance(getattr(self, attr), list):
+				setattr(self, attr, [cudafy(_) for _ in getattr(self, attr)])
+		return
+
+	def cpu(self):
+		""" If the trainset are lists of tensors, this makes sure they end up
+			back on the cpu 
+		"""
+		for attr in 'trainset', 'valset':
+			if isinstance(getattr(self, attr), list):
+				setattr(self, attr, [cpufy(_) for _ in getattr(self, attr)])
+		return
 
 
 
-def training_loop(network, train_params, epoch_start_no=0):
+def training_loop(network, train_params, epoch_start_no=0, 
+				  use_cuda=False, epoch_callback=None):
 	""" Trains a network over the trainset with given loss and optimizer
 	ARGS:
 		network: ReLUNet - network to train
 		train_params: TrainParameters - parameters object governing training
 		epoch_start_no: int - number to start epochs at for print purposes
+		use_cuda: bool - if True, we use CUDA to train the net. Everything 
+						 gets returned on CPU
+		epoch_callback: if not none, is a function that takes in arguments
+					    {'network': network, 'epoch_no': epoch_no}
 	RETURNS:
 		None, but modifies network parameters
 	"""
+	use_cuda = torch.cuda.is_available() and use_cuda
+	if use_cuda: 
+		network.cuda()
+		train_params.cuda()
+	else:
+		network.cpu()
+		train_params.cpu()
+
 	# Unpack the parameter object
 	if train_params.optimizer is None:
 		optimizer = optim.Adam(network.parameters(), lr=0.001, weight_decay=0)
@@ -69,23 +99,35 @@ def training_loop(network, train_params, epoch_start_no=0):
 	else:
 		loss_functional = train_params.loss_functional
 	loss_functional.attach_network(network)
-	
+
 	# Do the training loop
 	for epoch_no in range(epoch_start_no, epoch_start_no + train_params.num_epochs):
 		for i, (examples, labels) in enumerate(train_params.trainset):
+			if examples.dtype != network.dtype:
+				examples = examples.type(network.dtype)
+			if use_cuda:
+				examples, labels = cudafy([examples, labels])
+
 			optimizer.zero_grad()
 			loss = loss_functional(examples, labels)
 			loss.backward()
 			optimizer.step()
 		if (epoch_no) % test_after_epoch == 0:
 			# If we run test accuracy this test
-			test_acc = test_validation(network, train_params.valset)
+			test_acc = test_validation(network, train_params.valset, 
+									   use_cuda=use_cuda)
 			test_acc_str = '| Accuracy: %.02f' % (test_acc * 100)
 			print(("Epoch %02d " % epoch_no) + test_acc_str)
 
+		if epoch_callback is not None:
+			epoch_callback(network=network, epoch_no=epoch_no)
+
+	if use_cuda:
+		network = network.cpu()
+		train_params.cpu()
 
 
-def test_validation(network, valset, loss_functional=None):
+def test_validation(network, valset, loss_functional=None, use_cuda=False):
 	""" Report the top1 accuracy of network over the
 		if loss_functional is None:
 			Returns top1 accuracy in range [0.0, 1.0]
@@ -96,8 +138,14 @@ def test_validation(network, valset, loss_functional=None):
 	total = 0
 	count_value = 0
 	for examples, labels in valset:
+		if examples.dtype != network.dtype:
+			examples = examples.type(network.dtype)
+		if use_cuda:
+			examples, labels = cudafy([examples, labels])
 		total += labels.numel()
 		if loss_functional is None:
+			xout = network(examples).max(1)[1]
+			xout == labels
 			count_value += (network(examples).max(1)[1] == labels).sum().item()
 		else:
 			count_value += loss_functional(examples, labels).data.item()
@@ -432,3 +480,41 @@ class GradientStability(ReluStability):
 		# --- now handle the final (first) FC layer
 		weight = self.network.fcs[0].weight
 		return ia_mm(weight.t(), post_acts[-1], 1, matrix_or_vec=matrix_or_vec)
+
+
+class FGSM(Regularizer):
+	def __init__(self, linf_bound, global_lo=0.0, global_hi=1.0, 
+				 network=None, scalar=1.0):
+		super(FGSM, self).__init__(scalar)
+		self.linf_bound = linf_bound 
+		self.global_lo = global_lo
+		self.global_hi = global_hi
+		self.network = network
+
+	def forward(self, examples, labels, outputs=None):
+		adv_examples = aa.fgsm(self.network, examples, labels, 
+							   self.linf_bound, global_lo=self.global_lo,
+							   global_hi=self.global_hi)
+		adv_logits = self.network(adv_examples)
+		return self.scalar * nn.CrossEntropyLoss()(adv_logits, labels)
+
+
+class PGD(Regularizer):
+	def __init__(self, linf_bound, num_iter=10, step_size=0.02, 
+				 global_lo=0.0, global_hi=1.0, network=None, scalar=1.0):
+		super(PGD, self).__init__(scalar)
+		self.linf_bound = linf_bound 
+		self.num_iter = num_iter
+		self.step_size = step_size
+		self.global_lo = global_lo
+		self.global_hi = global_hi
+		self.network = network
+
+	def forward(self, examples, labels, outputs=None):
+		adv_examples = aa.pgd(self.network, examples, labels, 
+							  self.linf_bound, num_iter=self.num_iter, 
+							  step_size=self.step_size, 
+							  global_lo=self.global_lo,
+							  global_hi=self.global_hi)
+		adv_logits = network(adv_examples)
+		return self.scalar * nn.CrossEntropyLoss()(adv_logits, labels)

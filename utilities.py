@@ -9,6 +9,8 @@ import io
 import contextlib
 import tempfile
 import time 
+import re
+import pickle
 import inspect 
 # ===============================================================================
 # =           Helpful all-purpose functions                                     =
@@ -53,6 +55,33 @@ class Factory(ParameterObject):
 		return '<Factory: %s>' % self.constructor.__self__.__name__
 
 
+class DoEvery:
+
+	@classmethod 
+	def dummy(cls, *args, **kwargs):
+		pass
+
+	def __init__(self, func, freq):
+		""" Simple class that holds onto a function and it returns 
+			this function every freq iterations
+		ARGS:
+			func: function object to be returned every freq iterations
+			freq: int - how often to return the function 
+		"""
+		self.func = func 
+		self.freq = freq 
+		self.i = 0
+
+	def __call__(self, *args, **kwargs):
+		if self.i % self.freq == 0:
+			returner = self.func 
+		else:
+			returner = self.dummy 
+		self.i += 1
+		return returner(*args, **kwargs)
+
+
+
 
 class Timer:
 	def __init__(self, start_on_init=True):
@@ -68,7 +97,6 @@ class Timer:
 
 	def reset(self):
 		self.start_time = self.stop_time = None
-
 
 
 def prod(num_iter):
@@ -290,3 +318,146 @@ def seq_append(seq, module):
 	"""
 	seq_modules = [seq[_] for _ in range(len(seq))] + [module]
 	return nn.Sequential(*seq_modules)
+
+def cpufy(tensor_iter):
+	""" Takes a list of tensors and safely pushes them back onto the cpu"""
+	return [_.cpu() for _ in tensor_iter]
+
+def cudafy(tensor_iter):
+	""" Takes a list of tensors and safely converts all of them to cuda"""
+	def safe_cuda(el):
+		try:
+			return el.cuda()
+		except AssertionError:
+			return el 
+	return [safe_cuda(_) for _ in tensor_iter]
+
+
+# =======================================
+# =           Polytope class            =
+# =======================================
+
+class Polytope:
+	INPUT_KEY = 'input'
+	SLACK_KEY = 'slack'
+	def __init__(self, A, b):
+		""" Represents a polytope of the form {x | AX <= b}
+		    (where everything is a numpy array)
+		"""
+		self.A = A  
+		self.b = b 
+
+	def _input_from_model(self, model):
+		var_namer = build_var_namer(self.INPUT_KEY)
+		return np.array([model.getVarByName(var_namer(i)).X 
+ 						 for i in range(self.A.shape[1])])
+
+
+	def _build_model(self, slack=False):
+		""" Builds a gurobi model of this object """
+		with silent():
+			model = gb.Model() 
+
+		input_namer = build_var_namer(self.INPUT_KEY)
+		input_vars = [model.addVar(lb=-gb.GRB.INFINITY, ub=gb.GRB.INFINITY, 
+								   name=input_namer(i))
+		 		      for i in range(self.A.shape[1])]
+		if slack == True:		 		      
+			slack_var = model.addVar(lb=0, ub=1.0, name=self.SLACK_KEY)
+		else: 
+			slack_var = 0
+
+		for i, row in enumerate(self.A):
+			model.addConstr(gb.LinExpr(row, input_vars) + slack_var <= self.b[i])
+		model.update()
+		return model
+
+	def contains(self, x, tolerance=1e-6):
+		return all(self.A @ x <= self.b + tolerance)
+
+
+	def interior_point(self):
+		model = self._build_model(slack=True)
+		slack_var = model.getVarByName(self.SLACK_KEY)
+		model.setObjective(slack_var, gb.GRB.MAXIMIZE)
+		model.update()
+		model.optimize()
+
+		assert model.Status == 2
+		return self._input_from_model(model)
+
+
+	def intersects_hbox(self, hbox):
+		""" If this intersects a given hyperbox, returns a 
+			point contained in both
+		"""
+
+		model = self._build_model(slack=True)
+		input_namer = build_var_namer(self.INPUT_KEY)
+
+		for i, (lb, ub) in enumerate(hbox):
+			var = model.getVarByName(input_namer(i))
+			model.addConstr(lb <= var <= ub)
+
+		slack_var = model.getVarByName(self.SLACK_KEY)
+		model.setObjective(slack_var, gb.GRB.MAXIMIZE)
+		model.update()		
+		model.optimize()
+
+		assert model.Status == 2
+		return self._input_from_model(model)
+
+
+# =========================================================
+# =           experiment.Result object helpers            =
+# =========================================================
+
+def filename_to_epoch(filename):
+	return int(re.search(r'_EPOCH\d{4}_', filename).group()[-5:-1])
+
+def read_result_files(result_files):
+	output = []
+	for result_file in result_files:
+		try:
+			with open(result_file, 'rb') as f:
+				output.append((result_file, pickle.load(f)))
+		except Exception as err:
+			print("Failed on file: ", result_file, err)
+	return output
+
+def job_out_series(job_outs, eval_style, method, 
+				   value_or_time='value', avg_stdev='avg'):
+	""" Takes in some result or resultList objects and 
+		a 'method', and desired object, and returns these objects
+		in a list
+	ARGS:
+		results: Result[] or ResultList[], results to consider
+		eval_style: str - which method of Experiment we look at
+		method: str - which Lipschitz-estimation technique to consider
+		value_or_time: 'value' or 'time' - which number to return 
+		avg_stdev: 'avg' or 'stdev' - for ResultList[], we can 
+				   get average or stdev values 
+	RETURNS:
+		list of floats
+	"""
+	# check everything is the same type
+	assert value_or_time in ['value', 'time']
+	assert avg_stdev in ['avg', 'stdev']
+	assert eval_style in ['do_random_evals', 'do_unit_hypercube_eval',
+						      'do_data_evals', 'do_large_radius_evals']
+
+	results = [job_out[eval_style] for job_out in job_outs]
+	output = []
+	for result in results:
+		try: #Result object case
+			if value_or_time == 'value':
+				output.append(result.values(method))
+			else:
+				output.append(result.compute_times(method))
+		except:
+			triple = result.average_stdevs(value_or_time)[method]
+			if avg_stdev == 'avg':
+				output.append(triple[0])
+			else:
+				output.append(triple[1])
+	return output

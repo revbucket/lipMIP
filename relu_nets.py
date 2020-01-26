@@ -8,7 +8,8 @@ import torch.nn.functional as F
 import numpy as np
 from collections import OrderedDict
 import matplotlib.pyplot as plt 
-
+import utilities as utils
+import gurobipy as gb
 
 class ReLUNet(nn.Module):
     def __init__(self, layer_sizes=None, bias=True, dtype=torch.float32,
@@ -136,8 +137,6 @@ class ReLUNet(nn.Module):
                 'grad': max_grad}
 
 
-
-
     def display_decision_bounds(self, x_range, y_range, density, figsize=(8,8)):
         """ For 2d-input networks, will use EricWong-esque code to 
             build an axes object and plot decision boundaries 
@@ -150,7 +149,7 @@ class ReLUNet(nn.Module):
             ax object
         """
         # Right now only works for functions mapping R2->R2
-        assert self.layer_sizes[0] == 2 and self.layer_sizes[-1] == 2
+        assert self.layer_sizes[0] == 2# and self.layer_sizes[-1] == 2
 
         # Compute the grid points
         x_lo, x_hi = x_range
@@ -175,6 +174,110 @@ class ReLUNet(nn.Module):
         seq_start = 2 * i
         seq_out = self.net[seq_start: seq_start + 2]
         return (seq_out[0], seq_out[1])
+
+    def get_sign_configs(self, x):
+        preacts = [utils.as_numpy(_.squeeze()) for _ in 
+                   self(x.view(-1), return_preacts=True)[:-1]]
+        return [_ > 0 for _ in preacts]
+
+
+    def polytope_from_signs(self, signs):
+        """ Returns a 'polytope' of the form (A, b) where 
+            A is an (m,n)-numpy array and (b) is a numpy vector 
+            and this is the set of points 
+            {x | Ax <= b} defined by the sign config provided
+        ARGS:
+            signs: list of numpy boolean arrays corresponding to 
+                   which ReLU's are on 
+        RETURNS: 
+        """
+        configs = [torch.tensor(sign).type(self.dtype) for sign in signs]
+        lambdas = [torch.diag(config) for config in configs]
+        js = [torch.diag(-2 * config + 1) for config in configs]
+        # Compute Z_k = W_k * x + b_k for each layer
+        wks = [self.fcs[0].weight]
+        bks = [self.fcs[0].bias]
+        for (i, fc) in enumerate(self.fcs[1:]):
+            current_wk = wks[-1]
+            current_bk = bks[-1]
+            current_lambda = lambdas[i]
+            precompute = fc.weight.matmul(current_lambda)
+            wks.append(precompute.matmul(current_wk))
+            bks.append(precompute.matmul(current_bk) + fc.bias)
+
+        a_stack = []
+        b_stack = []
+        for j, wk, bk in zip(js, wks, bks):
+            a_stack.append(j.matmul(wk))
+            b_stack.append(-j.matmul(bk))
+
+        polytope_A = utils.as_numpy(torch.cat(a_stack, dim=0))
+        polytope_b = utils.as_numpy(torch.cat(b_stack, dim=0))
+        return utils.Polytope(polytope_A, polytope_b)
+
+
+    def find_feasible_from_signs(self, sign_configs, input_hbox=None):
+        """ Finds a feasible differentiable point that has the given 
+            ReLU configs. 
+        """
+        # First check shapes are okay:
+        assert len(sign_configs) == self.num_relus
+        assert all([len(sign_configs[i]) == self.layer_sizes[i + 1] 
+                    for i in range(self.num_relus)])
+        # Then build a gurobi model and add constraints for each layer
+        with utils.silent():
+            model = gb.Model() 
+
+        # Add input keys:
+        input_key = 'input'
+        input_namer = utils.build_var_namer(input_key)
+        input_vars = []
+        for i in range(self.layer_sizes[0]):
+            if input_hbox is not None:
+                lb, ub = input_hbox[i]
+            else:
+                lb, ub = -gb.GRB.INFINITY, gb.GRB.INFINITY
+            input_vars.append(model.addVar(lb=lb, ub=ub, name=input_namer(i)))
+
+        slack_var = model.addVar(lb=0, name='slack')
+
+        # And then iteratively add layers
+        lin_vars = input_vars
+        for i in range(self.num_relus):
+            lin_vars = self._add_layer_to_gurobi_model(i, model, lin_vars, 
+                                                       slack_var, sign_configs[i])
+
+        # Add the objective to maximize and then solve
+        model.setObjective(slack_var, gb.GRB.MAXIMIZE)
+        model.update()
+        model.optimize()
+
+        # And handle the outputs
+        if model.Status in [3, 4]:
+            return None
+        else:
+            return {'slack': model.getObjective().getValue(),
+                    'x': np.array([v.X for v in input_vars]),
+                    'model': model}
+
+    def _add_layer_to_gurobi_model(self, layer_num, model, lin_vars, slack_var,
+                                   layer_signs):
+        """ Adds new variables and new constraints """
+
+        weight = utils.as_numpy(self.fcs[layer_num].weight)
+        bias = utils.as_numpy(self.fcs[layer_num].bias)
+        output_vars = []
+        for i, row in enumerate(weight):
+            if layer_signs[i] == True:
+                var = model.addVar(lb=-gb.GRB.INFINITY, ub=gb.GRB.INFINITY)
+                model.addConstr(var == gb.LinExpr(row, lin_vars) + bias[i])
+                model.addConstr(gb.LinExpr(row, lin_vars) + bias[i] - slack_var >= 0.0)
+            else:
+                var = model.addVar(lb=0.0, ub=0.0)
+                model.addConstr(gb.LinExpr(row, lin_vars) + bias[i] + slack_var <= 0.0)
+            output_vars.append(var)
+        return output_vars
+
 
 
 class SubReLUNet(ReLUNet):

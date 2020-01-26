@@ -4,6 +4,9 @@ from lipMIP import LipProblem, LipResult
 import utilities as utils
 from hyperbox import Hyperbox
 import numpy as np
+import pickle
+import os
+from neural_nets import data_loaders as dl
 
 class Experiment(utils.ParameterObject):
 	""" Will set up factories for a bunch of methods """
@@ -27,6 +30,11 @@ class Experiment(utils.ParameterObject):
 		else:
 			network = self.network
 		return network.layer_sizes[0]
+
+	def attach_kwargs(self, **kwargs):
+		""" Attaches attributes to the experiment in the constructor_kwargs"""
+		for k, v in kwargs.items():
+			self.constructor_kwargs[k] = v
 
 
 	def compute(self, **kwargs):
@@ -71,9 +79,15 @@ class Experiment(utils.ParameterObject):
 		"""
 		assert 'domain' not in kwargs
 		dimension =self._get_dimension(**kwargs)
+		if not isinstance(r, list):
+			cube = Hyperbox.build_linf_ball(np.zeros(dimension), r)
+			return self(domain=cube, **kwargs).compute()
 
-		cube = Hyperbox.build_linf_ball(np.zeros(dimension), r)
-		return self(domain=cube, **kwargs).compute()
+		output = []
+		for subr in r:
+			cube = Hyperbox.build_linf_ball(np.zeros(dimension), subr)
+			output.append(self(domain=cube, **kwargs).compute())
+		return ResultList(output)
 
 
 	def do_data_evals(self, data_points, ball_factory, 
@@ -114,9 +128,11 @@ class InstanceGroup:
 		Will evaluate all of them together and return the result in a nice
 		dict
 	"""
-	def __init__(self, instance_dict, constructor_kwargs, call_kwargs):
+	def __init__(self, instance_dict, constructor_kwargs, call_kwargs,
+				 ig_verbose=False):
 		self.instance_dict = instance_dict
 		self.total_kwargs = {k: v for k,v in constructor_kwargs.items()}
+		self.ig_verbose = ig_verbose
 		for k, v in call_kwargs.items():
 			self.total_kwargs[k] = v
 		for k, v in self.total_kwargs.items():
@@ -125,14 +141,23 @@ class InstanceGroup:
 	def compute(self, verbose=False):
 		output_dict = {}
 		for k, v in self.instance_dict.items():
-			if verbose:
-				print("Working on %s %s" % (k, suffix))
+			if verbose or self.ig_verbose:
+				print("Working on %s" % k)
 			if isinstance(v, LipProblem):
-				result = v.compute_max_lipschitz()
+				try: # This sometimes fails on random instances...
+					result = v.compute_max_lipschitz().shrink()
+				except:
+					result = None
+			if isinstance(v, om.LipLP):
+				try: # This also sometimes fails =(
+					result = v.compute()
+				except:
+					result = None
 			elif isinstance(v, om.OtherResult):
 				v.compute()
 				result = v
-			output_dict[k] = v
+			if result is not None:
+				output_dict[k] = result
 		return Result(output_dict, total_kwargs=self.total_kwargs)
 
 	def __repr__(self):
@@ -204,3 +229,168 @@ class ResultList:
 
 		return {k: (get_mean(v), get_stdev(v), get_count(v)) 
 				for k,v in data_lists.items()}
+
+
+
+# ==========================================================================
+# =           OFFLINE EXPERIMENT SCRIPT HELPERS                            =
+# ==========================================================================
+
+
+class MethodNest:
+	""" Think of this as a (method, set-of-arguments).
+		We'll hand this object an Experiment Object and this will supply 
+		the 
+			-method of the Experiment object to run 
+		 	-arguments to call that method
+	"""
+	METHODS = {Experiment.do_random_evals, Experiment.do_unit_hypercube_eval,
+				 Experiment.do_large_radius_eval, Experiment.do_data_evals}
+
+	def __init__(self, method, arg_bundle=None):
+		assert method in self.METHODS
+		self.method = method
+		self.arg_bundle = arg_bundle or {}
+
+
+	def __call__(self, experiment, **kwargs):
+		""" Runs the experiment object"""
+		ARGMAPPER = {Experiment.do_random_evals: self.args_do_random_evals,
+ 					 Experiment.do_unit_hypercube_eval: self.args_do_unit_hypercube_eval,
+					 Experiment.do_large_radius_eval: self.args_do_large_radius_eval, 
+					 Experiment.do_data_evals: self.args_do_data_evals}
+
+		args = ARGMAPPER[self.method]()
+		for k, v in kwargs.items():
+			args[k] = v
+		return self.method(experiment, **args)
+
+
+	def args_do_random_evals(self):
+		""" Handles arguments for random evals. Structure of arg_bundle 
+			looks like:
+		{num_random_points: int for how many random points to take 
+		 sample_domain:     Hyperbox to draw random points from 
+		 ball_factory:      object that takes in point and makes a hyperbox
+		}
+		"""
+		req_keys = ['num_random_points', 'sample_domain', 'ball_factory']
+		return {k: self.arg_bundle[k] for k in req_keys}
+
+	def args_do_unit_hypercube_eval(self):
+		""" Needs no args! =)"""
+		return {}
+
+
+	def args_do_large_radius_eval(self):
+		""" Needs a radius or list of radii for large-radius evals """
+		return {'r': self.arg_bundle['r']}
+
+
+	def args_do_data_evals(self):
+		""" Complicated arg bundles! 
+		Must have a 'data_type', 'loader_kwargs', 'ball_factory' keys 
+		But if data_type is MNIST, 'loader_kwargs' corresponds to kwargs
+		for dl.load_mnist_data. 
+
+		If data_type i= 'synthetic', then we need to have a dataset parameter 
+		object in arg_bundle['params']
+		and then 'loader_kwargs' corresponds to kwargs for 
+		RandomDataset object 
+		"""
+
+		# First consider the dataset: 
+		assert self.arg_bundle['data_type'] in ['MNIST', 'synthetic']
+
+		# Do MNIST data generation
+		if self.arg_bundle['data_type'] == 'MNIST':
+			data_loader = dl.load_mnist_data(**self.arg_bundle['loader_kwargs'])
+			data = next(iter(data_loader))[0]
+
+		# Do synthetic data generation
+		elif self.arg_bundle['data_type'] == 'synthetic':
+			params = self.arg_bundle['params']
+			dataset = dl.RandomDataset(params, 
+								  	   **self.arg_bundle['loader_kwargs'])
+			dataset.split_train_val(1.0)
+			data = dataset.train_data[0][0]
+		else:
+			pass
+
+		return {'data_points': data,
+				'ball_factory': self.arg_bundle['ball_factory'],
+				'num_random': self.arg_bundle.get('num_random', None),
+				}
+
+
+
+class Job(utils.ParameterObject):
+	""" Job is an object that represents a set of experiments to be run.
+		It has the following properties:
+		- ReLuNet
+		- Which techniques to evaluate 
+		- Which methods to run for each
+		- A 'name'
+		And the following functions:
+		- run(...) runs all the experiments, SAFELY, and returns the answer 
+		  in a pickleable object 
+		- write(...) writes this UNEXECUTED JOB to a file 
+		- @classmethod: load from file
+	"""
+
+	def __init__(self, name, experiment, method_nests, 
+				 save_loc=None, **extra_args):
+		""" Builds an experiment object and stores instructions on how to 
+			run each method:
+		ARGS:
+			name : name of this job, helpful for writing files
+			network : ReLUNet object 
+			class_list : list of lipschitz estimation classes 
+			method_nests: list of MethodNest objects
+			exp_kwargs : any other kwargs to be used to build the 
+						 experiment object
+		"""	
+		super(Job, self).__init__(name=name, 
+								  experiment=experiment,
+								  method_nests=method_nests,
+								  save_loc=save_loc,
+								  **extra_args)
+
+
+	@classmethod
+	def from_file(cls, filename):
+		# Loads file and unpickles from a job object
+		with open(filename, 'rb') as f:
+			return pickle.load(f)
+
+
+
+	def _get_savefile(self, ext='.job'):
+		assert ext[0] == '.'
+		if self.save_loc is not None:
+			write_file = os.path.join(self.save_loc, self.name)
+		else:
+			write_file = self.name
+		return '%s%s' % (write_file, ext)
+
+
+	def run(self, write_to_file=True, **kwargs):
+		""" Safely runs every method as described by the method nests"""
+		output_object = {}
+		for method_nest in self.method_nests:
+			output_object[method_nest.method.__name__] = \
+					method_nest(self.experiment, **kwargs)
+
+
+		output_object['Job'] = self
+
+		if write_to_file:
+			with open(self._get_savefile(ext='.result'), 'wb') as f:
+				pickle.dump(output_object, f)
+		return output_object
+
+
+	def write(self):
+		""" Pickles this object and writes it to a file """
+		with open(self._get_savefile(), 'wb') as f:
+			pickle.dump(self, f)

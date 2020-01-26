@@ -178,7 +178,6 @@ class Hyperbox(Domain):
     def as_twocol(self):
         return np.stack([self.box_low, self.box_hi]).T
 
-
     def map_linear(self, linear, forward=True):
         """ Takes in a torch.Linear operator and maps this object through 
             the linear map (either forward or backward)
@@ -199,8 +198,8 @@ class Hyperbox(Domain):
             torch_radii = torch.Tensor(radii)
             new_midpoint = utils.as_numpy(linear.weight.t() @ torch_mid)
             new_radii = utils.as_numpy(linear.weight.t().abs() @ torch_radii)
-
         return Hyperbox.from_midpoint_radii(new_midpoint, new_radii)
+        
 
 
     def map_relu(self):

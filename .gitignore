@@ -1,7 +1,8 @@
 ################### PERSONAL GITIGNORE ##################
 scratch/
-
-
+jobs/
+other_methods/saved_weights
+tests/*.ipynb
 ####################### DEFAULT GITIGNORE ############################
 # Byte-compiled / optimized / DLL files
 __pycache__/

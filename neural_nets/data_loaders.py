@@ -14,7 +14,7 @@ import utilities as utils
 # ===============================================================================
 
 def load_mnist_data(train_or_val, digits=None, batch_size=128, shuffle=False,
-                    dataset_dir=DEFAULT_DATASET_DIR):
+                    use_cuda=False, dataset_dir=DEFAULT_DATASET_DIR):
     """ Builds the standard MNIST data loader object for training or evaluation
         of MNIST data
     ARGS:
@@ -23,11 +23,11 @@ def load_mnist_data(train_or_val, digits=None, batch_size=128, shuffle=False,
 
     """
     assert train_or_val in ['train', 'val']
-
+    use_cuda = torch.cuda.is_available() and use_cuda
     dataloader_constructor = {'batch_size': batch_size, 
                               'shuffle': shuffle, 
                               'num_workers': 4,
-                              'pin_memory': False}
+                              'pin_memory': use_cuda}
     transform_chain = transforms.ToTensor()
     if digits == None:
         mnist_dataset = datasets.MNIST(root=dataset_dir, 
@@ -39,7 +39,7 @@ def load_mnist_data(train_or_val, digits=None, batch_size=128, shuffle=False,
                                  download=True, transform=transform_chain)
 
     return torch.utils.data.DataLoader(mnist_dataset, **dataloader_constructor)
-    
+
 
 class SubMNIST(datasets.MNIST):
     valid_digits = set(range(10))
@@ -106,9 +106,11 @@ class EricParameters(utils.ParameterObject):
         - num points
         - radius
     """
-    def __init__(self, num_points, radius):
+    def __init__(self, num_points, radius, dimension=2, num_classes=2):
         super(EricParameters, self).__init__(num_points=num_points, 
-                                             radius=radius)
+                                             radius=radius,
+                                             dimension=dimension,
+                                             num_classes=num_classes)
 
 class RandomKParameters(utils.ParameterObject):
     flavor = 'randomk'
@@ -124,9 +126,11 @@ class RandomKParameters(utils.ParameterObject):
         - num leaders (k)
     """
 
-    def __init__(self, num_points, k, radius=None):
+    def __init__(self, num_points, k, radius=None, dimension=2, num_classes=2):
         super(RandomKParameters, self).__init__(num_points=num_points, 
-                                                k=k, radius=radius)
+                                                k=k, radius=radius, 
+                                                dimension=dimension,
+                                                num_classes=num_classes)
 
 
 class SwirlyParameters(utils.ParameterObject):
@@ -144,16 +148,18 @@ class SwirlyParameters(utils.ParameterObject):
     def __init__(self, num_points, a, b, min_t, max_t, noise_bound=None):
         super(SwirlyParameters, self).__init__(num_points=num_points, a=a, b=b,
                                                min_t=min_t, max_t=max_t,
-                                               noise_bound=noise_bound)
+                                               noise_bound=noise_bound,
+                                               dimension=2)
 
 
 
-class Random2DBinaryDataset:
+class RandomDataset:
     """ Builds randomized 2-dimensional, 2-class datasets """
     def __init__(self, parameters, batch_size=128, random_seed=None):
         assert isinstance(parameters, (EricParameters, RandomKParameters, 
                                        SwirlyParameters))
         self.parameters = parameters
+        self.dim = self.parameters.dimension
         self.batch_size = int(batch_size)
         if random_seed is None:
             random_seed = random.randint(1, 420 * 69)
@@ -232,6 +238,7 @@ class Random2DBinaryDataset:
 
     def plot_2d(self, figsize=(8,8), ax=None):
         """ Plots the data points """
+        assert self.dim == 2
         if ax is None:
             fig, ax = plt.subplots(figsize=figsize)
         data, labels = self.base_data 
@@ -248,32 +255,36 @@ class Random2DBinaryDataset:
         """ Generates Eric Wong's 2d training set """
         num_points = self.parameters.num_points
         radius = self.parameters.radius
-
-        data_points = self._generate_random_separated_data(num_points, radius)
+        num_classes = self.parameters.num_classes
+        data_points = self._generate_random_separated_data(num_points, radius, 
+                                                           self.dim)
         while len(data_points) < num_points:
-            point = np.random.uniform(size=(2))
+            point = np.random.uniform(size=(self.dim))
             if min(np.linalg.norm(point - a) for a in data_points) > 2 * radius:
                 data_points.append(point)
         data = torch.Tensor(np.stack(data_points))
-        labels = torch.Tensor((np.random.random(num_points) > 0.5).astype(np.uint8))
+        labels = torch.randint(low=0, high=num_classes, size=(num_points,), dtype=torch.uint8)
+        #labels = torch.Tensor((np.random.random(num_points) > 0.5).astype(np.uint8))
         return (data, labels.long())
 
     def _generate_data_randomk(self):
         """ Generates random k-cluster data """
         num_points = self.parameters.num_points
         k = self.parameters.k 
-
+        num_classes = self.parameters.num_classes
         # first make data
         if getattr(self.parameters, 'radius') is not None:
             radius = self.parameters.radius
-            data_points = self._generate_random_separated_data(num_points, radius)
+            data_points = self._generate_random_separated_data(num_points, radius, 
+                                                              self.dim)
             data_points = np.stack(data_points)
         else:
-            data_points = np.random.uniform(size=(num_points, 2))
+            data_points = np.random.uniform(size=(num_points, self.dim))
 
         # then pick leaders and assign them labels
         leader_indices = np.random.choice(num_points, size=(k), replace=False)
-        random_labels = (np.random.random(k) > 0.5).astype(np.uint8)
+        random_labels = np.random.randint(low=0, high=num_classes, size=k,
+                                          dtype=np.uint8)
 
         # and finally assign labels to everything else 
         all_labels = np.zeros(num_points).astype(np.uint8)
@@ -292,6 +303,7 @@ class Random2DBinaryDataset:
 
 
     def _generate_data_swirly(self):
+        assert self.dim == 2
         num_points = self.parameters.num_points
         a = self.parameters.a 
         b = self.parameters.b
@@ -328,14 +340,14 @@ class Random2DBinaryDataset:
 
 
     @classmethod
-    def _generate_random_separated_data(cls, num_points, radius):
+    def _generate_random_separated_data(cls, num_points, radius, dim):
         """ Generates num_points points in 2D at least radius apart 
             from each other 
-        OUTPUT IS A LIST OF NUMPY ARRAYS, EACH OF SHAPE (2,)
+        OUTPUT IS A LIST OF NUMPY ARRAYS, EACH OF SHAPE (dim,)
         """
         data_points = []
         while len(data_points) < num_points:
-            point = np.random.uniform(size=(2))
+            point = np.random.uniform(size=(dim))
             if len(data_points) == 0:
                 data_points.append(point)
                 continue

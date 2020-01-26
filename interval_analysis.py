@@ -45,8 +45,15 @@ class HBoxIA(object):
 		self.network = network
 		self.input_domain = input_domain
 
+		self.c_vector = backprop_domain # HACKETY HACK
 		if utils.arraylike(backprop_domain):
 			backprop_domain = Hyperbox.from_vector(backprop_domain)
+		elif backprop_domain in ['crossLipschitz', 'l1Ball1']:
+			output_dim = network.layer_sizes[-1]
+			backprop_domain = Hyperbox.build_linf_ball(np.zeros(output_dim), 1.0)
+
+
+
 		self.backprop_domain = backprop_domain
 
 		self.forward_boxes = {}
@@ -171,6 +178,44 @@ class HBoxIA(object):
 														   forward=False)
 
 		return new_obj
+
+	def gurobi_backprop_domain(self, squire, key):
+		""" Adds variables representing feasible points in the 
+			backprop_domain to the gurobi model. These are based on the
+			c_vector and not the backprop domain
+		ARGS:
+			squire : gurobiSquire object - holds the model 
+			key: string - key for the new variables to be added
+		RETURNS:
+			gurobipy Variables[] - list of variables added to gurobi
+		"""
+		if isinstance(self.c_vector, Hyperbox):
+			return self.c_vector.encode_as_gurobi_model(squire, key)
+
+
+		model = squire.model
+		namer = utils.build_var_namer(key)
+		gb_vars = []
+		if utils.arraylike(self.c_vector):
+			for i, el in enumerate(self.c_vector):
+				gb_vars.append(model.addVar(lb=el, ub=el, namer=namer(i)))
+		else:
+			assert self.c_vector in ['crossLipschitz', 'l1Ball']
+			output_dim = self.network.layer_sizes[-1]
+			pos_vars = [model.addVar(lb=0, ub=1) for i in range(output_dim)]
+			neg_vars = [model.addVar(lb=0, ub=1) for i in range(output_dim)]		
+			if self.c_vector == 'crossLipschitz':
+				model.addConstr(sum(pos_vars) <= 1)
+				model.addConstr(sum(neg_vars) <= 1)
+			else:
+				model.addConstr(sum(pos_vars) + sum(neg_vars) <= 1)
+			for i in range(output_dim):
+				gb_vars.append(model.addVar(lb=-1.0, ub=1.0, name=namer(i)))
+				model.addConstr(gb_vars[-1] == pos_vars[i] - neg_vars[i])
+
+		squire.set_vars(key, gb_vars)
+		squire.update()
+		return gb_vars
 
 	# ===================================================================
 	# =           Naive Interval Analysis Techniques                    =
