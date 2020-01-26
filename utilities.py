@@ -98,6 +98,18 @@ class Timer:
 	def reset(self):
 		self.start_time = self.stop_time = None
 
+def cpufy(tensor_iter):
+	""" Takes a list of tensors and safely pushes them back onto the cpu"""
+	return [_.cpu() for _ in tensor_iter]
+
+def cudafy(tensor_iter):
+	""" Takes a list of tensors and safely converts all of them to cuda"""
+	def safe_cuda(el):
+		try:
+			return el.cuda()
+		except AssertionError:
+			return el 
+	return [safe_cuda(_) for _ in tensor_iter]
 
 def prod(num_iter):
 	""" returns product of all elements in this iterator *'ed together"""

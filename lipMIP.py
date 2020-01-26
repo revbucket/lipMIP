@@ -471,7 +471,6 @@ def build_objective(gurobi_squire, lp):
 # =========================================================================
 
 def build_input_constraints(squire, var_key):
-
     # If domain is a hyperbox, can cover with lb/ub in var constructor
     var_namer = utils.build_var_namer(var_key)
     model = squire.model

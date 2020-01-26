@@ -70,8 +70,10 @@ def training_loop(network, train_params, epoch_start_no=0,
 		epoch_start_no: int - number to start epochs at for print purposes
 		use_cuda: bool - if True, we use CUDA to train the net. Everything 
 						 gets returned on CPU
+
 		epoch_callback: if not none, is a function that takes in arguments
 					    {'network': network, 'epoch_no': epoch_no}
+
 	RETURNS:
 		None, but modifies network parameters
 	"""
