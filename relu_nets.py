@@ -10,6 +10,7 @@ from collections import OrderedDict
 import matplotlib.pyplot as plt 
 import utilities as utils
 import gurobipy as gb
+import copy
 
 class ReLUNet(nn.Module):
     def __init__(self, layer_sizes=None, bias=True, dtype=torch.float32,
@@ -24,22 +25,33 @@ class ReLUNet(nn.Module):
             self.net = self.build_network(layer_sizes)
         else:
             self.net = manual_net
-
-
+            self._adjust_fcs()
 
     @classmethod
     def from_sequential(cls, sequential):
-        fcs = [_ for _ in sequential if isinstance(_, nn.Linear, nn.Identity)]
+        fcs = [_ for _ in sequential if isinstance(_, (nn.Linear, nn.Identity))]
         layer_sizes = [fcs[0].in_features]
         for fc in fcs:
             layer_sizes.append(fc.out_features)
-        bias = any(fc.bias for fc in fcs)
-        dtype = fcs[0].dytpe
+        bias = any(fc.bias is not None for fc in fcs)
+        dtype = fcs[0].weight.dtype
 
         new_net = cls(layer_sizes=layer_sizes, bias=bias, 
                       dtype=dtype, manual_net=sequential)
         new_net.fcs = fcs
         return new_net
+
+    def _adjust_fcs(self):
+        """ Collects FC's from self.net and modifies self.fcs """
+        fcs = [_ for _ in self.net if isinstance(_, (nn.Linear, nn.Identity))]
+        self.fcs = fcs
+
+    def re_init_weights(self):
+        self.net = self.build_network(self.layer_sizes)
+
+    def clone(self):
+        """ Returns a deepcopy of this object """
+        return self.from_sequential(copy.deepcopy(self.net))
 
 
     def tensorfy_clone(self, x, requires_grad=False):
@@ -53,7 +65,7 @@ class ReLUNet(nn.Module):
 
     def build_network(self, layer_sizes):
         layers = OrderedDict()
-
+        self.fcs = []
         num = 1
         for size_pair in zip(layer_sizes, layer_sizes[1:]):
             size, next_size = size_pair

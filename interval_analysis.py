@@ -198,7 +198,7 @@ class HBoxIA(object):
 		gb_vars = []
 		if utils.arraylike(self.c_vector):
 			for i, el in enumerate(self.c_vector):
-				gb_vars.append(model.addVar(lb=el, ub=el, namer=namer(i)))
+				gb_vars.append(model.addVar(lb=el, ub=el, name=namer(i)))
 		else:
 			assert self.c_vector in ['crossLipschitz', 'l1Ball']
 			output_dim = self.network.layer_sizes[-1]

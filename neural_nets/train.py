@@ -102,6 +102,9 @@ def training_loop(network, train_params, epoch_start_no=0,
 
 	# Do the training loop
 	for epoch_no in range(epoch_start_no, epoch_start_no + train_params.num_epochs):
+		if epoch_callback is not None:
+			epoch_callback(network=network, epoch_no=epoch_no)
+		
 		for i, (examples, labels) in enumerate(train_params.trainset):
 			if examples.dtype != network.dtype:
 				examples = examples.type(network.dtype)
@@ -119,8 +122,6 @@ def training_loop(network, train_params, epoch_start_no=0,
 			test_acc_str = '| Accuracy: %.02f' % (test_acc * 100)
 			print(("Epoch %02d " % epoch_no) + test_acc_str)
 
-		if epoch_callback is not None:
-			epoch_callback(network=network, epoch_no=epoch_no)
 
 	if use_cuda:
 		network = network.cpu()
@@ -150,6 +151,43 @@ def test_validation(network, valset, loss_functional=None, use_cuda=False):
 		else:
 			count_value += loss_functional(examples, labels).data.item()
 	return float(count_value) / total
+
+
+def best_of_k(base_network, train_params, k, use_cuda=False, **kwargs):
+	""" Takes in a network and trains it K times, taking the best validation
+		accuracy after all of them 
+	ARGS: 
+		base_network : ReLuNet instance - object that gets trained several times 
+		train_params: TrainParameters instance - object that dictates how 
+					  training goes 
+		k: int - how many times we copy the training
+		use_cuda : bool - if True we use CUDA to do things faster
+		kwargs : any other keyword args to pass to training_loop
+	RETURNS:
+		None, but modifies the base_network parameters
+	"""	
+	best_val_acc = 0.0
+	best_relunet = None
+	if k == 1: # K =1 case
+		return training_loop(base_network, train_params, use_cuda=use_cuda,
+							 **kwargs)
+
+	for i in range(k): #K > 1 case
+		print("Starting training run %02d of %02d" % (i, k))
+		this_net = base_network.clone()
+		this_net.re_init_weights()
+		training_loop(this_net, train_params, use_cuda=use_cuda, **kwargs)
+		this_val_acc = test_validation(this_net, train_params.valset,
+  								       use_cuda=use_cuda)
+		print("...ending training run with acc %.02f" % (100 * this_val_acc))
+		if this_val_acc > best_val_acc:
+			best_val_acc = this_val_acc
+			best_relunet = this_net
+
+	base_network.fcs = best_relunet.fcs
+	base_network.net = best_relunet.net
+	return base_network
+
 
 
 def train_cacher(saved_name, network=None, trainset=None, valset=None, num_epochs=None,

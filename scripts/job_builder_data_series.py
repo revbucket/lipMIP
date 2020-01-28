@@ -32,19 +32,19 @@ def main():
 	# ==========================================================
 	NAME = None
 	C_VECTOR = None
+	PRIMAL_NORM = None
 	RADIUS = None 
 	RANDOM_SEED = 420
 	DIMENSION_SERIES = None
 	NUM_POINT_SERIES = None
-	exp_kwargs = {'c_vector': C_VECTOR,
-				  'primal_norm': 'linf'}
-	RADIUS = 0.1
 	LOCAL_METHODS = [FastLip, LipLP, LipProblem]
 	GLOBAL_METHODS = [LipProblem, FastLip, LipLP, SeqLip, LipSDP, 
 					  NaiveUB, RandomLB]
-
+					  
+	exp_kwargs = {'c_vector': C_VECTOR,
+				  'primal_norm': PRIMAL_NORM}
 	# ==========================================================
-	# =           HELPER SETUP -- THESE CAN BE FIXED           =
+	# =           HELPER SETUP -- THESE CAN BE LEFT ALONE      =
 	# ==========================================================
 	BALL_FACTORY = Factory(Hyperbox.build_linf_ball, radius=RADIUS)
 	def NAME_FXN(network):

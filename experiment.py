@@ -150,7 +150,8 @@ class InstanceGroup:
 					result = None
 			if isinstance(v, om.LipLP):
 				try: # This also sometimes fails =(
-					result = v.compute()
+					v.compute()
+					result = v
 				except:
 					result = None
 			elif isinstance(v, om.OtherResult):

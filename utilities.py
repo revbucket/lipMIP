@@ -12,6 +12,10 @@ import time
 import re
 import pickle
 import inspect 
+import glob
+import os
+
+COMPLETED_JOB_DIR = os.path.join(os.path.dirname(__file__), 'jobs', 'completed')
 # ===============================================================================
 # =           Helpful all-purpose functions                                     =
 # ===============================================================================
@@ -321,13 +325,23 @@ def seq_append(seq, module):
 
 def cpufy(tensor_iter):
 	""" Takes a list of tensors and safely pushes them back onto the cpu"""
-	return [_.cpu() for _ in tensor_iter]
+	output = []
+	for el in tensor_iter:
+		if isinstance(el, tuple):
+			output.append(tuple(_.cpu() for _ in el))
+		else:
+			output.append(el.cpu())
+	return output
+
 
 def cudafy(tensor_iter):
 	""" Takes a list of tensors and safely converts all of them to cuda"""
 	def safe_cuda(el):
 		try:
-			return el.cuda()
+			if isinstance(el, tuple):
+				return tuple(_.cuda() for _ in el)
+			else:
+				return el.cuda()
 		except AssertionError:
 			return el 
 	return [safe_cuda(_) for _ in tensor_iter]
@@ -461,3 +475,67 @@ def job_out_series(job_outs, eval_style, method,
 			else:
 				output.append(triple[1])
 	return output
+
+
+def collect_result_outs(filematch):
+	""" Uses glob to collect and load result objects matching a series
+	ARGS:
+		filematch: string with *'s associated with it
+				   e.g. 'NAME*SUBNAME*GLOBAL.result'
+	RESULTS:
+		list of (filename, experiment.Result) objects
+	"""
+	search_str = os.path.join(COMPLETED_JOB_DIR, filematch)
+	sorted_filenames = sorted(glob.glob(search_str))
+	return read_result_files(sorted_filenames)
+
+
+def collect_epochs(filename_list):
+	""" Given a list of (filename) objects, converts
+		the filenames into integers, pulling the EPOCH attribute from 
+		the filename 
+	str[] -> int[]
+	"""
+	def epoch_gleamer(filename):
+		basename = os.path.basename(filename)
+		return int(re.search('_EPOCH\d+_', filename).group()[6:-1])
+	return [epoch_gleamer(_) for _ in filename_list]
+
+
+def data_from_results(result_iter, method, lip_estimator, time_or_value='value',
+					  avg_or_stdev='avg'):
+	""" Given a list of experiment.Result or experiment.ResultList objects
+		will return the time/value for the lip_estimator of the method 
+		for result (or avg/stdev if resultList objects)
+		e.g., data_from_results('do_unit_hypercube_eval', 'LipProblem',
+								 'value') gets a list of values of the 
+								 LipProblem over the unitHypercube domain
+	ARGS:
+		method: str - name of one of the experimental methods 
+		lip_estimator : str - name of the class of lipschitz estimator to use
+		time_or_value : 'time' or 'value' - returning the time or value here
+		avg_or_stdev  : 'avg' or 'stdev' - returning either avg or stdev of 
+						results from ResultListObjects
+	"""
+	assert method in ['do_random_evals', 'do_data_evals',
+					  'do_unit_hypercube_eval']
+	assert lip_estimator in ['LipProblem', 'FastLip', 'LipLP', 'CLEVER', 
+							 'LipSDP', 'NaiveUB', 'RandomLB', 'SeqLip']
+	assert time_or_value in ['time', 'value']
+	assert avg_or_stdev in ['avg', 'stdev']
+
+	def datum_getter(result_obj):
+		if not hasattr(result_obj, 'average_stdevs'):
+			if time_or_value == 'value':
+				return result_obj[method].values(lip_estimator)
+			else:
+				return result_obj[method].compute_times(lip_estimator)
+		else:
+			triple = result_obj.average_stdevs(time_or_value)
+			if avg_or_stdev == 'avg':
+				return triple[0]
+			else:
+				return triple[1]
+
+	return [datum_getter(_) for _ in result_iter]
+
