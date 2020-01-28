@@ -13,7 +13,7 @@ import gurobipy as gb
 import copy
 
 class ReLUNet(nn.Module):
-    def __init__(self, layer_sizes=None, bias=True, dtype=torch.float32,
+    def __init__(self, layer_sizes=None, bias=True, dtype=torch.float64,
                  manual_net=None):
         super(ReLUNet, self).__init__()
         self.layer_sizes = layer_sizes

@@ -187,17 +187,22 @@ class Hyperbox(Domain):
                       were doing backprop
         """
         assert isinstance(linear, nn.Linear)
-        midpoint = (self.box_hi + self.box_low) / 2.0 
-        radii = (self.box_hi - self.box_low) / 2.0 
-
+        midpoint = (self.box_hi + self.box_low) / 2.0
+        radii = (self.box_hi - self.box_low) / 2.0
+        dtype = linear.weight.dtype
+        midpoint = torch.tensor(midpoint, dtype=dtype)
+        radii = torch.tensor(radii, dtype=dtype)
         if forward:
-            new_midpoint = utils.as_numpy(linear(torch.Tensor(midpoint)))
+
+            new_midpoint = utils.as_numpy(linear(midpoint))
             new_radii = utils.as_numpy(torch.abs(linear.weight)).dot(radii)
         else:
+
             torch_mid = torch.Tensor(midpoint)
             torch_radii = torch.Tensor(radii)
             new_midpoint = utils.as_numpy(linear.weight.t() @ torch_mid)
             new_radii = utils.as_numpy(linear.weight.t().abs() @ torch_radii)
+
         return Hyperbox.from_midpoint_radii(new_midpoint, new_radii)
         
 

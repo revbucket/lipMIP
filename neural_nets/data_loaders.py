@@ -106,12 +106,12 @@ class EricParameters(utils.ParameterObject):
         - num points
         - radius
     """
+
     def __init__(self, num_points, radius, dimension=2, num_classes=2):
         super(EricParameters, self).__init__(num_points=num_points, 
                                              radius=radius,
                                              dimension=dimension,
                                              num_classes=num_classes)
-
 class RandomKParameters(utils.ParameterObject):
     flavor = 'randomk'
     """ Random K-cluster dataset
@@ -150,6 +150,7 @@ class SwirlyParameters(utils.ParameterObject):
                                                min_t=min_t, max_t=max_t,
                                                noise_bound=noise_bound,
                                                dimension=2)
+
 
 
 
