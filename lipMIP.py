@@ -74,7 +74,8 @@ class LipProblem(utils.ParameterObject):
                  timeout=None, mip_gap=None, num_threads=None):
         init_kwargs = {k: v for k, v in locals().items()
                        if k not in ['self', '__class__']}
-        assert utils.arraylike(c_vector) or c_vector in ['crossLipschitz', 'l1Ball']
+        assert (utils.arraylike(c_vector) or 
+                (c_vector in ['crossLipschitz', 'l1Ball', 'multiclassRobust']))
         super(LipProblem, self).__init__(**init_kwargs)
         self.result = None
 
@@ -126,7 +127,7 @@ class LipProblem(utils.ParameterObject):
 
         runtime = timer.stop()
         x_vars = squire.get_vars('x')
-        value = model.getObjective().getValue()
+        value = model.ObjBound #model.getObjective().getValue()
         best_x = np.array([v.X for v in x_vars])
         best_sign_config = squire.get_sign_configs()
         result = LipResult(self.network, self.c_vector, value=value,
@@ -806,7 +807,6 @@ def set_linf_objective(squire, box_range, abs_key, maxint_key):
             model.addConstr(max_var >= abs_vars[idx])
             model.addConstr(max_var <= abs_vars[idx] + 
                                        (1 - maxint_var) * (u_max - lbs[idx]))
-        print("MAXINT", list(maxint_vars.values()))
         model.addConstr(1 == sum(list(maxint_vars.values())))
 
     model.setObjective(max_var, gb.GRB.MAXIMIZE)

@@ -48,7 +48,7 @@ class HBoxIA(object):
 		self.c_vector = backprop_domain # HACKETY HACK
 		if utils.arraylike(backprop_domain):
 			backprop_domain = Hyperbox.from_vector(backprop_domain)
-		elif backprop_domain in ['crossLipschitz', 'l1Ball1']:
+		elif backprop_domain in ['crossLipschitz', 'l1Ball1', 'multiclassRobust']:
 			output_dim = network.layer_sizes[-1]
 			backprop_domain = Hyperbox.build_linf_ball(np.zeros(output_dim), 1.0)
 
@@ -200,15 +200,21 @@ class HBoxIA(object):
 			for i, el in enumerate(self.c_vector):
 				gb_vars.append(model.addVar(lb=el, ub=el, name=namer(i)))
 		else:
-			assert self.c_vector in ['crossLipschitz', 'l1Ball']
+			assert self.c_vector in ['crossLipschitz', 'l1Ball', 'multiclassRobust']
 			output_dim = self.network.layer_sizes[-1]
 			pos_vars = [model.addVar(lb=0, ub=1) for i in range(output_dim)]
 			neg_vars = [model.addVar(lb=0, ub=1) for i in range(output_dim)]		
 			if self.c_vector == 'crossLipschitz':
 				model.addConstr(sum(pos_vars) <= 1)
 				model.addConstr(sum(neg_vars) <= 1)
-			else:
-				model.addConstr(sum(pos_vars) + sum(neg_vars) <= 1)
+			elif self.c_vector == 'multiclassRobust':
+				network = squire.network
+				center = squire.pre_bounds.input_domain.get_center()
+				label = network.classify_np(center)
+				for i, pos_var in enumerate(pos_vars):
+					if i != label:
+						model.addConstr(pos_var == 0.0)
+				#model.addConstr(sum(pos_vars) + sum(neg_vars) <= 1)
 			for i in range(output_dim):
 				gb_vars.append(model.addVar(lb=-1.0, ub=1.0, name=namer(i)))
 				model.addConstr(gb_vars[-1] == pos_vars[i] - neg_vars[i])

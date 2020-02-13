@@ -246,7 +246,7 @@ class RandomDataset:
         data_np = utils.as_numpy(data)
         labels_np = utils.as_numpy(labels)
         ax.scatter(data_np[:,0], data_np[:,1], c=labels_np, cmap='coolwarm')
-
+        return ax
 
     # ==============================================================
     # =          DATA GENERATION TECHNIQUES                        =

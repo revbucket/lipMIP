@@ -258,6 +258,7 @@ class LossFunctional:
 		#             for reg in self.regularizers])
 
 		# slightly more cleverly:
+
 		if any(reg.requires_ff for reg in self.regularizers):
 			outputs = self.network(examples)
 			losses = sum([reg.forward(examples, labels, outputs=outputs)
@@ -296,6 +297,7 @@ class XEntropyReg(Regularizer):
 		return 'XEntropy: (scalar: %.02e)' % self.scalar
 
 	def forward(self, examples, labels, outputs=None):
+
 		if outputs is None:
 			outputs = self.network(examples)
 		return self.scalar * nn.CrossEntropyLoss()(outputs, labels)

@@ -30,6 +30,10 @@ class NaiveUB(OtherResult):
 		# BE CAREFUL HERE -- IS THIS THE BEST WE CAN DO????
 		return np.linalg.norm(utils.as_numpy(w), np.inf) # IS THIS RIGHT???
 
+	@classmethod 
+	def l1_norm(cls, w):
+		return np.linalg.norm(utils.as_numpy(w), 1)
+
 	# ====================================================================
 	# =           Main Function Block                                    =
 	# ====================================================================
@@ -42,6 +46,9 @@ class NaiveUB(OtherResult):
 
 		elif self.primal_norm == 'linf':
 			self.norm_fxn = self.linf_norm
+
+		elif self.primal_norm == 'l1':
+			self.norm_fxn = self.l1_norm
 
 	def compute(self):
 		""" Computes the L2 global lipschitz constant for this network

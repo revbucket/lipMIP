@@ -7,6 +7,7 @@ import numpy as np
 import pickle
 import os
 from neural_nets import data_loaders as dl
+import math
 
 class Experiment(utils.ParameterObject):
 	""" Will set up factories for a bunch of methods """
@@ -199,6 +200,27 @@ class Result:
 class ResultList:
 	def __init__(self, results):
 		self.results = results 
+
+	def get_rel_err(self, dim):
+		""" Collects the relative error of each method and reports stats"""
+
+		def dim_scale(k, val, dim):
+			if k not in ['SeqLip', 'LipSDP']:
+				return val
+			else:
+				return math.sqrt(dim) * val
+		rel_errors = {}
+		for result in self.results:
+			val_dict = result.values()
+			if 'LipProblem' not in val_dict:
+				continue 
+			right_answer = val_dict['LipProblem']
+			for k, v in val_dict.items():
+				if k not in rel_errors:
+					rel_errors[k] = []
+				rel_errors[k].append(dim_scale(k, v, dim) / right_answer)
+		return {k: (np.array(v).mean(), np.array(v).std(), len(v)) for 
+				k,v in rel_errors.items()}
 
 	def average_stdevs(self, attr):
 		""" Collects the average and standard deviations by keys in each 

@@ -13,7 +13,7 @@ import gurobipy as gb
 import copy
 
 class ReLUNet(nn.Module):
-    def __init__(self, layer_sizes=None, bias=True, dtype=torch.float64,
+    def __init__(self, layer_sizes=None, bias=True, dtype=torch.float32,
                  manual_net=None):
         super(ReLUNet, self).__init__()
         self.layer_sizes = layer_sizes
@@ -106,6 +106,9 @@ class ReLUNet(nn.Module):
             preacts.append(torch.clone(x))
             x = F.relu(x)
 
+    def classify_np(self, x):
+        tens_x = torch.Tensor(x)
+        return self.forward(tens_x).max(1)[1].item()
 
     def get_grad_at_point(self, x, c_vector):
         """ Simple helper method to get the gradient of a single input point

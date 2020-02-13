@@ -152,7 +152,10 @@ class Hyperbox(Domain):
 
         return domain
 
-
+    def get_center(self):
+        if self.center is not None:
+            return self.center
+        return (self.box_low + self.box_high)/2.0
 
     def random_point(self, num_points=1, tensor_or_np='np', 
                      requires_grad=False):
