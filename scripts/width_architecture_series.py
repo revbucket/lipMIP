@@ -1,7 +1,6 @@
-""" Script to have a training series for an MNIST network. 
-	Can set FREQUENCY to None to build jobs only at the end
+""" Script to build a bunch of networks, train each of them, and then
+	build jobs to evaluate each of these
 """
-
 import matlab.engine
 import numpy as np
 import torch 
@@ -23,45 +22,37 @@ SCHEDULE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__fi
 					   'jobs', 'scheduled')
 
 def main():
-	NAME = None
-	LAYER_SIZES = None
-	C_VECTOR = None # list of digits or the string 'crossLipschitz'
-	RANDOM_SEED = None
-	RADIUS = None
-	MNIST_DIGITS = None 	
-	FREQUENCY = None
-	EPOCHS = None
-	assert all([_ is not None for _ in [NAME, LAYER_SIZES, C_VECTOR, 
-										RANDOM_SEED, RADIUS, FREQUENCY, 
-										EPOCHS]])
-
-	exp_kwargs = {'c_vector': C_VECTOR,
+	NAME = 'width2Dv2'
+	exp_kwargs = {'c_vector': np.array([1.0, -1.0]), 
 				  'primal_norm': 'linf'}
-	DIMENSION = 784
+	DIMENSION = 2
+	RADIUS = 0.1
 	GLOBAL_LO = np.zeros(DIMENSION)
 	GLOBAL_HI = np.ones(DIMENSION)
+	RANDOM_SEED = 420
 	DOMAIN = Hyperbox.build_unit_hypercube(DIMENSION)
 	BALL_FACTORY = Factory(Hyperbox.build_linf_ball, radius=RADIUS)
-	NAMER = lambda epoch_no: '%s_EPOCH%04d' % (NAME, epoch_no)
+	LAYER_SEQ = [[2, 20 * i, 20 * i, 20 * i, 2] for i in range(7, 8)]
+	def NAME_FXN(network):
+		""" Returns a string based on the network """
+		width = network.layer_sizes[2]
+		return '%s_WIDTH%04d' % (NAME, width)
 	# ================================================================
 	# =           Data Parameters Setup                              =
 	# ================================================================
 	# Make both the training/validation sets 
-
-	train_set = dl.load_mnist_data('train', digits=MNIST_DIGITS)
-	val_set = dl.load_mnist_data('val', digits=MNIST_DIGITS)
+	data_params = dl.RandomKParameters(num_points=300, k=10, radius=0.01, 
+									   dimension=DIMENSION)
+	dataset = dl.RandomDataset(data_params, batch_size=128, 
+							   random_seed=RANDOM_SEED)
+	train_set, _ = dataset.split_train_val(1.0)
 
 	# Make the data arg_bundle object
-	loader_kwargs = {'batch_size': 100, 'digits': MNIST_DIGITS,
-					 'shuffle': True}
-	train_arg_bundle = {'data_type': 'MNIST',
-		 			    'loader_kwargs': loader_kwargs,
-		 			    'ball_factory': BALL_FACTORY,
-		 			    'train_or_val': 'train'}
-	val_arg_bundle = {'data_type': 'MNIST',
- 	 			      'loader_kwargs': loader_kwargs,
-		 			  'ball_factory': BALL_FACTORY,
-		 			  'train_or_val': 'val'}
+	loader_kwargs = {'batch_size': 100, 'random_seed': RANDOM_SEED}
+	data_arg_bundle = {'data_type': 'synthetic', 
+					   'params': data_params,
+					   'loader_kwargs': loader_kwargs,
+					   'ball_factory': BALL_FACTORY}
 
 	# ================================================================
 	# =           Training Parameter Setup                           =
@@ -69,22 +60,12 @@ def main():
 
 	# Build the loss functional and set the optimizer 
 	xentropy = train.XEntropyReg()
-	l2_penalty = train.LpWeightReg(scalar=1e-2, lp='l2')
+	l2_penalty = train.LpWeightReg(scalar=1e-3, lp='l1')
 	loss_functional = train.LossFunctional(regularizers=[xentropy])
-	train_params = train.TrainParameters(train_set, train_set, EPOCHS, 
+	train_params = train.TrainParameters(train_set, train_set, 200, 
 										 loss_functional=loss_functional,
 										 test_after_epoch=20)
-	# Build the base network architecture
-	network = ReLUNet(layer_sizes=LAYER_SIZES)
 
-
-	# ================================================================
-	# =           Build the Experiment objects                       =
-	# ================================================================
-
-	local_exp = Experiment([FastLip, LipLP, LipProblem], network=network,
-						   **exp_kwargs)
-	global_exp = Experiment(GLOBAL_METHODS, network=network, **exp_kwargs)
 
 	# ================================================================
 	# =           Build the methodNests                              =
@@ -97,41 +78,45 @@ def main():
 							   'num_random_points': 20})
 
 	# --- data-based method nest 
-	train_nest = MethodNest(Experiment.do_data_evals, train_arg_bundle)
-	val_nest = MethodNest(Experiment.do_data_evals, val_arg_bundle)
+	data_nest = MethodNest(Experiment.do_data_evals, data_arg_bundle)
 
 
 	# --- hypercube stuff 
 	cube_nest = MethodNest(Experiment.do_unit_hypercube_eval)
 
-	local_nests = [random_nest, train_nest, val_nest, cube_nest]
+	local_nests = [random_nest, data_nest, cube_nest]
 	global_nests = [cube_nest]
 
 
-	def build_jobs(epoch_no, network=None):
-		local_job_name = NAMER(epoch_no) + '_LOCAL'
+	def build_jobs(network, **exp_kwargs):
+		local_exp = Experiment([FastLip, LipLP, LipProblem], network=network, 
+							   **exp_kwargs)	
+		global_exp = Experiment([LipProblem, FastLip, LipLP, SeqLip, LipSDP, NaiveUB], 
+								network=network, **exp_kwargs)
+		prefix = NAME_FXN(network)
+		#prefix = '%s_RELUS%02d' % (NAME, network.num_relus)
+		local_job_name = prefix + "_LOCAL"
 		local_job = Job(local_job_name, local_exp, local_nests,
 						save_loc=SCHEDULE_DIR)
-		local_job.write()
-
-		global_job_name = NAMER(epoch_no) + '_GLOBAL'
+		global_job_name = prefix + "_GLOBAL"
 		global_job = Job(global_job_name, global_exp, global_nests,
 						 save_loc=SCHEDULE_DIR)
+		local_job.write()		
 		global_job.write()
 
-	if FREQUENCY is None:
-		job_do_every = None
-	else:
-		job_do_every = DoEvery(build_jobs, FREQUENCY)
+
 
 	# ==============================================================
-	# =           Train the network                                =
+	# =           Train the networks                                =
 	# ==============================================================
 
-	train.training_loop(network, train_params, epoch_callback=job_do_every)
-	if FREQUENCY is None:
-		build_jobs(EPOCHS)
+	for layer_size in LAYER_SEQ:
+		print("Starting training:", layer_size)
+		network = ReLUNet(layer_sizes=layer_size)
+		train.training_loop(network, train_params)
+		build_jobs(network, **exp_kwargs)
 
 
 if __name__ == '__main__':
+
 	main()

@@ -21,7 +21,6 @@ import os
 SCHEDULE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
 					   'jobs', 'scheduled')
 
-
 def main():
 	NAME = 'WideSeq'
 	exp_kwargs = {'c_vector': np.array([1.0, -1.0]), 

@@ -1,4 +1,5 @@
 ################### PERSONAL GITIGNORE ##################
+experimental_results/
 scratch/
 jobs/
 other_methods/saved_weights

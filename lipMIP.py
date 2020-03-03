@@ -75,7 +75,8 @@ class LipProblem(utils.ParameterObject):
         init_kwargs = {k: v for k, v in locals().items()
                        if k not in ['self', '__class__']}
         assert (utils.arraylike(c_vector) or 
-                (c_vector in ['crossLipschitz', 'l1Ball', 'multiclassRobust']))
+                (c_vector in ['crossLipschitz', 'targetCrossLipschitz', 
+                              'trueCrossLipschitz', 'trueTargetCrossLipschitz']))
         super(LipProblem, self).__init__(**init_kwargs)
         self.result = None
 

@@ -112,24 +112,22 @@ def main():
 
 			local_job = Job('%s_LOCAL' % prefix, local_exp, local_nests,
 							save_loc=SCHEDULE_DIR)
-			global_job = JOB('%s_GLOBAL' % prefix, global_exp, global_nests,
+			global_job = Job('%s_GLOBAL' % prefix, global_exp, global_nests,
 							 save_loc=SCHEDULE_DIR)
 
 			local_job.write()
 			global_job.write()
 
-		dummy_fxn = lambda e, n: pass
-
-		if FREQUENCY is None:
-			return dummy_fxn, build_jobs
+		if JOB_FREQUENCY is None:
+			return None, build_jobs
 		else:
-			return DoEvery(build_jobs, FREQUENCY), build_jobs
+			return DoEvery(build_jobs, JOB_FREQUENCY), build_jobs
 
 	# ==============================================================
 	# =           Train the networks                                =
 	# ==============================================================
 	for reg_name, regularizers in REGULARIZER_SERIES.items():
-
+		print('-' * 30, 'TRAINING --', reg_name)
 		# First build job builder:
 		callback, final = build_callback_and_final(reg_name)
 
@@ -137,11 +135,11 @@ def main():
 		loss_functional = train.LossFunctional(regularizers=regularizers)
 		train_params = train.TrainParameters(train_set, train_set, 500,
 										 loss_functional=loss_functional,
-										 test_after_epoch=50,
-										 epoch_callback=callback)
+										 test_after_epoch=50)
+
 		network = ReLUNet(layer_sizes=LAYER_SIZES)
 
-		train.best_of_k(network, train_params, BEST_OF_K,
+		train.best_of_k(network, train_params, NUM_RESTARTS,
 						epoch_callback=callback)
 		# Finally call the final fxn
 		final(epoch_no=train_params.num_epochs, network=network)

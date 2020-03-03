@@ -2,7 +2,7 @@
 import numpy as np
 from hyperbox import Hyperbox, BooleanHyperbox
 import utilities as utils 
-
+import gurobipy as gb
 
 class HBoxIA(object):
 	""" Class that holds all information about pushing Hyperboxes through 
@@ -48,10 +48,14 @@ class HBoxIA(object):
 		self.c_vector = backprop_domain # HACKETY HACK
 		if utils.arraylike(backprop_domain):
 			backprop_domain = Hyperbox.from_vector(backprop_domain)
-		elif backprop_domain in ['crossLipschitz', 'l1Ball1', 'multiclassRobust']:
+		elif backprop_domain in ['l1Ball1', 'crossLipschitz', 'targetCrossLipschitz',
+							     'trueCrossLipschitz', 'trueTargetCrossLipschitz']:
 			output_dim = network.layer_sizes[-1]
-			backprop_domain = Hyperbox.build_linf_ball(np.zeros(output_dim), 1.0)
-
+			if backprop_domain == 'l1Ball1':
+				radius = 1.0
+			else:
+				radius = 2.0
+			backprop_domain = Hyperbox.build_linf_ball(np.zeros(output_dim), radius)
 
 
 		self.backprop_domain = backprop_domain
@@ -189,39 +193,87 @@ class HBoxIA(object):
 		RETURNS:
 			gurobipy Variables[] - list of variables added to gurobi
 		"""
+		VALID_C_NAMES = ['crossLipschitz', # m-choose-2, convex hull w/ simplex
+						 'targetCrossLipschitz', # m-1, convex hull w/simplex
+						 'trueCrossLipschitz', # m-choose-2, MIP
+						 'trueTargetCrossLipschitz' #m-1, MIP
+						 ]
+		assert utils.arraylike(self.c_vector) or self.c_vector in VALID_C_NAMES
+		model = squire.model
+		namer = utils.build_var_namer(key)
+
+		# HANDLE HYPERBOX CASE 
 		if isinstance(self.c_vector, Hyperbox):
 			return self.c_vector.encode_as_gurobi_model(squire, key)
 
 
-		model = squire.model
-		namer = utils.build_var_namer(key)
+		# HANDLE FIXED C-VECTOR CASE
 		gb_vars = []
 		if utils.arraylike(self.c_vector):
 			for i, el in enumerate(self.c_vector):
 				gb_vars.append(model.addVar(lb=el, ub=el, name=namer(i)))
-		else:
-			assert self.c_vector in ['crossLipschitz', 'l1Ball', 'multiclassRobust']
-			output_dim = self.network.layer_sizes[-1]
-			pos_vars = [model.addVar(lb=0, ub=1) for i in range(output_dim)]
-			neg_vars = [model.addVar(lb=0, ub=1) for i in range(output_dim)]		
-			if self.c_vector == 'crossLipschitz':
-				model.addConstr(sum(pos_vars) <= 1)
-				model.addConstr(sum(neg_vars) <= 1)
-			elif self.c_vector == 'multiclassRobust':
-				network = squire.network
-				center = squire.pre_bounds.input_domain.get_center()
-				label = network.classify_np(center)
-				for i, pos_var in enumerate(pos_vars):
-					if i != label:
-						model.addConstr(pos_var == 0.0)
-				#model.addConstr(sum(pos_vars) + sum(neg_vars) <= 1)
-			for i in range(output_dim):
-				gb_vars.append(model.addVar(lb=-1.0, ub=1.0, name=namer(i)))
-				model.addConstr(gb_vars[-1] == pos_vars[i] - neg_vars[i])
+			squire.set_vars(key, gb_vars)
+			squire.update()
+			return gb_vars
 
+		# HANDLE CROSS LIPSCHITZ CASES 		
+		output_dim = self.network.layer_sizes[-1]
+
+		if self.c_vector == 'crossLipschitz':
+			# --- HANDLE CROSS LIPSCHITZ CASE			
+			gb_vars = [model.addVar(lb=-1.0, ub=1.0, name=namer(i)) 
+					   for i in range(output_dim)]			
+			pos_vars = [model.addVar(lb=0.0, ub=1.0) for i in range(output_dim)]
+			neg_vars = [model.addVar(lb=0.0, ub=1.0) for i in range(output_dim)]
+			model.addConstr(sum(pos_vars) <= 1)
+			model.addConstr(sum(neg_vars) <= 1)
+			model.addConstr(sum(neg_vars) <= sum(pos_vars))
+
+		if self.c_vector =='trueCrossLipschitz':
+			# --- HANDLE TRUE CROSS LIPSCHITZ CASE 
+			gb_vars = [model.addVar(lb=-1.0, ub=1.0, name=namer(i)) 
+					   for i in range(output_dim)]						
+			pos_vars = [model.addVar(lb=0, ub=1, vtype=gb.GRB.BINARY) 
+						for i in range(output_dim)]
+			neg_vars = [model.addVar(lb=0, ub=1, vtype=gb.GRB.BINARY)
+						for i in range(output_dim)]
+			model.addConstr(sum(pos_vars) == 1)
+			model.addConstr(sum(neg_vars) == 1)
+			for i in range(output_dim):
+				model.addConstr(gb_vars[i] ==pos_vars[i] - neg_vars[i])
+
+		if self.c_vector == 'targetCrossLipschitz':
+			network = squire.network
+			center = squire.pre_bounds.input_domain.get_center()
+			label = network.classify_np(center)
+
+			label_less_vars = []
+			for i in range(output_dim):
+				if i == label:
+					gb_vars.append(model.addVar(lb=1.0,ub=1.0, name=namer(i)))
+				else:
+					new_var = model.addVar(lb=-1.0, ub=0.0, name=namer(i))
+					label_less_vars.append(new_var)
+					gb_vars.append(new_var)
+			model.addConstr(sum(label_less_vars) >= -1.0)
+
+		if self.c_vector == 'trueTargetCrossLipschitz':
+			network = squire.network
+			center = squire.pre_bounds.input_domain.get_center()
+			label = network.classify_np(center)
+			int_vars = []
+			for i in range(output_dim):
+				if i == label:
+					gb_vars.append(model.addVar(lb=1.0,ub=1.0, name=namer(i)))
+				else:
+					gb_vars.append(model.addVar(lb=-1.0, ub=0.0, name=namer(i)))
+					int_vars.append(model.addVar(lb=0, ub=1, vtype=gb.GRB.BINARY))
+					model.addConstr(gb_vars[-1] == -int_vars[-1])
+			model.addConstr(sum(int_vars) <= 1)
 		squire.set_vars(key, gb_vars)
 		squire.update()
 		return gb_vars
+
 
 	# ===================================================================
 	# =           Naive Interval Analysis Techniques                    =

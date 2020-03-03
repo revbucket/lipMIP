@@ -48,13 +48,12 @@ def main(name=None, local_or_global=None):
 	if local_or_global is not None:
 		re_suffix = r'_' + local_or_global + re_suffix
 	if name is not None:
-		re_prefix = name + r'_'
-	re_pattern = re_prefix + r'.+?' + re_suffix
+		re_prefix = name
+	re_pattern = re_prefix + r'.*?' + re_suffix
 
 	# Step 2: enumerate all jobs matching regex 
 	files = sorted([f for f in os.listdir(SCHEDULE_DIR) 
 					if re.match(re_pattern, f)])
-
 
 	# Step 3: enter main scheduler loop 
 	for filename in files:
