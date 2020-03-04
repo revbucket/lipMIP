@@ -12,7 +12,7 @@ from hyperbox import Hyperbox
 from relu_nets import ReLUNet
 from neural_nets import data_loaders as dl
 from neural_nets import train
-from lipMIP import LipProblem
+from lipMIP import LipMIP
 from other_methods import CLEVER, FastLip, LipLP, LipSDP, NaiveUB, RandomLB, SeqLip
 from other_methods import LOCAL_METHODS, GLOBAL_METHODS
 from utilities import Factory, DoEvery
@@ -82,7 +82,7 @@ def main():
 	# =           Build the Experiment objects                       =
 	# ================================================================
 
-	local_exp = Experiment([FastLip, LipLP, LipProblem], network=network,
+	local_exp = Experiment([FastLip, LipLP, LipMIP], network=network,
 						   **exp_kwargs)
 	global_exp = Experiment(GLOBAL_METHODS, network=network, **exp_kwargs)
 

@@ -42,7 +42,7 @@ class LipSDP(OtherResult):
 		return {'weights': np.array(weight_list, dtype=np.object)}
 
 
-	def __init__(self, network, c_vector):
+	def __init__(self, network, c_vector, primal_norm=None, domain=None):
 		""" Solves LipSDP for given network/c_vector """
 		super(LipSDP, self).__init__(network, c_vector, None, 'l2')
 		self.dimension = network.layer_sizes[0]

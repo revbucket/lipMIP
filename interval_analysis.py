@@ -1,8 +1,10 @@
 """ Techniques to pass domains through the operation of a neural net """
 import numpy as np
 from hyperbox import Hyperbox, BooleanHyperbox
+from l1_balls import L1Ball
 import utilities as utils 
 import gurobipy as gb
+
 
 class HBoxIA(object):
 	""" Class that holds all information about pushing Hyperboxes through 
@@ -196,7 +198,8 @@ class HBoxIA(object):
 		VALID_C_NAMES = ['crossLipschitz', # m-choose-2, convex hull w/ simplex
 						 'targetCrossLipschitz', # m-1, convex hull w/simplex
 						 'trueCrossLipschitz', # m-choose-2, MIP
-						 'trueTargetCrossLipschitz' #m-1, MIP
+						 'trueTargetCrossLipschitz', #m-1, MIP
+						 'l1Ball1' # C can be in the l1 ball of norm 1
 						 ]
 		assert utils.arraylike(self.c_vector) or self.c_vector in VALID_C_NAMES
 		model = squire.model
@@ -216,8 +219,14 @@ class HBoxIA(object):
 			squire.update()
 			return gb_vars
 
-		# HANDLE CROSS LIPSCHITZ CASES 		
+
+		# HANDLE STRING CASES (CROSS LIPSCHITZ, l1ball)
+
 		output_dim = self.network.layer_sizes[-1]
+		if self.c_vector == 'l1Ball1':
+			l1_ball = L1Ball.make_unit_ball(output_dim)
+			l1_ball.encode_as_gurobi_model(squire, key)
+			return squire.get_vars(key)
 
 		if self.c_vector == 'crossLipschitz':
 			# --- HANDLE CROSS LIPSCHITZ CASE			

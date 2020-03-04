@@ -355,4 +355,3 @@ class RandomDataset:
             if min(np.linalg.norm(point - a) for a in data_points) > 2 * radius:
                 data_points.append(point)
         return data_points
-

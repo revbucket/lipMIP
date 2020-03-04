@@ -103,7 +103,7 @@ def training_loop(network, train_params, epoch_start_no=0,
 	loss_functional.attach_network(network)
 
 	# Do the training loop
-	for epoch_no in range(epoch_start_no, epoch_start_no + train_params.num_epochs):
+	for epoch_no in range(epoch_start_no, epoch_start_no + train_params.num_epochs + 1):
 		if epoch_callback is not None:
 			epoch_callback(network=network, epoch_no=epoch_no)
 		

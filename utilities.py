@@ -519,9 +519,9 @@ def data_from_results(result_iter, method, lip_estimator, time_or_value='value',
 	""" Given a list of experiment.Result or experiment.ResultList objects
 		will return the time/value for the lip_estimator of the method 
 		for result (or avg/stdev if resultList objects)
-		e.g., data_from_results('do_unit_hypercube_eval', 'LipProblem',
+		e.g., data_from_results('do_unit_hypercube_eval', 'LipMIP',
 								 'value') gets a list of values of the 
-								 LipProblem over the unitHypercube domain
+								 LipMIP over the unitHypercube domain
 	ARGS:
 		method: str - name of one of the experimental methods 
 		lip_estimator : str - name of the class of lipschitz estimator to use
@@ -531,7 +531,7 @@ def data_from_results(result_iter, method, lip_estimator, time_or_value='value',
 	"""
 	assert method in ['do_random_evals', 'do_data_evals',
 					  'do_unit_hypercube_eval']
-	assert lip_estimator in ['LipProblem', 'FastLip', 'LipLP', 'CLEVER', 
+	assert lip_estimator in ['LipMIP', 'FastLip', 'LipLP', 'CLEVER', 
 							 'LipSDP', 'NaiveUB', 'RandomLB', 'SeqLip']
 	assert time_or_value in ['time', 'value']
 	assert avg_or_stdev in ['avg', 'stdev']

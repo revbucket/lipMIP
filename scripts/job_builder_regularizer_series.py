@@ -21,7 +21,7 @@ from hyperbox import Hyperbox
 from relu_nets import ReLUNet
 from neural_nets import data_loaders as dl
 from neural_nets import train
-from lipMIP import LipProblem
+from lipMIP import LipMIP
 from other_methods import CLEVER, FastLip, LipLP, LipSDP, NaiveUB, RandomLB, SeqLip
 from other_methods import LOCAL_METHODS, GLOBAL_METHODS
 from utilities import Factory, DoEvery
@@ -53,8 +53,8 @@ def main():
 	RANDOM_SEED = 420    # Dataset random seed
 	NUM_EXP_RANDOM = None # num of random points to test in experiments
 	NUM_EXP_DATA   = None # num of data points to test in experiments
-	LOCAL_METHODS = [FastLip, LipLP, LipProblem] #Methods to do random/data
-	GLOBAL_METHODS = [LipProblem, FastLip, LipLP, SeqLip, LipSDP,
+	LOCAL_METHODS = [FastLip, LipLP, LipMIP] #Methods to do random/data
+	GLOBAL_METHODS = [LipMIP, FastLip, LipLP, SeqLip, LipSDP,
 					  NaiveUB, RandomLB] # Methods to do unit hcube
 	LAYER_SIZES = None
 

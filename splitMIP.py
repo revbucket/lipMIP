@@ -90,14 +90,14 @@ class SplitParameters:
 FLESHING THIS OUT:
 - want a function to split problems into multiple subproblems
 	+ input: standard lipschitz problem + split parameters	
-	+ output: number of subproblems, where each is a LipProblem
+	+ output: number of subproblems, where each is a LipMIP
 
 
 """
 
 
 
-class SplitLiPProblem:
+class SplitLipMIP:
 	def __init__(self, lip_prob, split_params, lookforward=0, lookback=0):
 		self.lip_prob = lip_prob
 		self.split_params = split_params
@@ -105,11 +105,11 @@ class SplitLiPProblem:
 
 
 	def _make_subproblems(self):
-		""" Makes LipProblem objects for splitting, based on how we split 
+		""" Makes LipMIP objects for splitting, based on how we split 
 		Three steps: 
 			  i) create subnetworks
 			 ii) create LipParam objects with new domains reflected
-			iii) create new LipParams->LipProblems
+			iii) create new LipParams->LipMIPs
 		"""
 		#   i) Collect subnetworks (+ target units)
 		subnetworks = self.network.make_subnetworks(self.split_params)
@@ -125,7 +125,7 @@ class SplitLiPProblem:
 		# iii) Make the subproblems
 		lip_problems = []
 		for subnet, domain, c_vec in zip(preacts, domains, c_vecs):
-			lip_prob = self.LipProblem.change_attrs(network=subnet,
+			lip_prob = self.LipMIP.change_attrs(network=subnet,
 												    domain=domain,
 												    c_vector=c_vec)
 		lip_problems.append(lip_prob)

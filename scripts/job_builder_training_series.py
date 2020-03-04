@@ -11,7 +11,7 @@ from hyperbox import Hyperbox
 from relu_nets import ReLUNet
 from neural_nets import data_loaders as dl
 from neural_nets import train
-from lipMIP import LipProblem
+from lipMIP import LipMIP
 from other_methods import CLEVER, FastLip, LipLP, LipSDP, NaiveUB, RandomLB, SeqLip
 from other_methods import LOCAL_METHODS, GLOBAL_METHODS, OTHER_METHODS
 from utilities import Factory, DoEvery
@@ -33,8 +33,8 @@ def main():
 	NUM_EPOCHS = None
 	FREQUENCY = None
 	LAYER_SIZES = None
-	LOCAL_METHODS = [FastLip, LipLP, LipProblem]
-	GLOBAL_METHODS = OTHER_METHODS + [LipProblem]
+	LOCAL_METHODS = [FastLip, LipLP, LipMIP]
+	GLOBAL_METHODS = OTHER_METHODS + [LipMIP]
 
 	NUM_RANDOM = None # Number of points in exp.do_random_evals
 	NUM_DATA = None   # Number of points in exp.do_data_evals

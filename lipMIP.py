@@ -35,7 +35,7 @@ import torch.nn as nn
 # =           MAIN SOLVER BLOCK                         =
 # =======================================================
 
-class LipProblem(utils.ParameterObject):
+class LipMIP(utils.ParameterObject):
     """ Object that holds ALL the parameters for a lipschitz 
         problem, but doesn't solve it until we tell it to.
     Specifically, we solve :
@@ -75,9 +75,9 @@ class LipProblem(utils.ParameterObject):
         init_kwargs = {k: v for k, v in locals().items()
                        if k not in ['self', '__class__']}
         assert (utils.arraylike(c_vector) or 
-                (c_vector in ['crossLipschitz', 'targetCrossLipschitz', 
+                (c_vector in ['l1Ball1', 'crossLipschitz', 'targetCrossLipschitz', 
                               'trueCrossLipschitz', 'trueTargetCrossLipschitz']))
-        super(LipProblem, self).__init__(**init_kwargs)
+        super(LipMIP, self).__init__(**init_kwargs)
         self.result = None
 
     def _self_attach_result(self, result):

@@ -21,15 +21,15 @@ class L1Ball(object):
 		self.dimension = len(center)
 
 	@classmethod
-	def make_unit_ball(dimension):
+	def make_unit_ball(cls, dimension):
 		""" Makes the unit l1 ball in the correct dimension """
 		return L1Ball(np.zeros(dimension), 1.0)
 
 
 	def encode_as_gurobi_model(self, squire, key):		
 		model = squire.model
-		pos_name = key + '_pos'
-		neg_name = key + '_neg'
+		pos_key = key + '_pos'
+		neg_key = key + '_neg'
 		# Create namers
 		key_namer = utils.build_var_namer(key)
 		pos_namer = utils.build_var_namer(pos_key)

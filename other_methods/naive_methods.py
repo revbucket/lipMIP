@@ -37,7 +37,7 @@ class NaiveUB(OtherResult):
 	# ====================================================================
 	# =           Main Function Block                                    =
 	# ====================================================================
-	def __init__(self, network, c_vector, primal_norm):
+	def __init__(self, network, c_vector, primal_norm, domain=None):
 		super(NaiveUB, self).__init__(network, c_vector, None, primal_norm)
 
 

@@ -1,6 +1,6 @@
 """ Evaluations and experimental helpers """
 import other_methods as om
-from lipMIP import LipProblem, LipResult
+from lipMIP import LipMIP, LipResult
 import utilities as utils
 from hyperbox import Hyperbox
 import numpy as np
@@ -11,7 +11,7 @@ import math
 
 class Experiment(utils.ParameterObject):
 	""" Will set up factories for a bunch of methods """
-	VALID_CLASSES = om.OTHER_METHODS + [LipProblem]
+	VALID_CLASSES = om.OTHER_METHODS + [LipMIP]
 	def __init__(self, class_list, **kwargs):
 		assert all(_ in self.VALID_CLASSES for _ in class_list)
 		super(Experiment, self).__init__(class_list=class_list, **kwargs)
@@ -125,7 +125,7 @@ class Experiment(utils.ParameterObject):
 
 
 class InstanceGroup:
-	""" Group of LipProblem, OtherResult that all share the same params
+	""" Group of LipMIP, OtherResult that all share the same params
 		Will evaluate all of them together and return the result in a nice
 		dict
 	"""
@@ -144,7 +144,7 @@ class InstanceGroup:
 		for k, v in self.instance_dict.items():
 			if verbose or self.ig_verbose:
 				print("Working on %s" % k)
-			if isinstance(v, LipProblem):
+			if isinstance(v, LipMIP):
 				try: # This sometimes fails on random instances...
 					result = v.compute_max_lipschitz().shrink()
 				except:
@@ -212,9 +212,9 @@ class ResultList:
 		rel_errors = {}
 		for result in self.results:
 			val_dict = result.values()
-			if 'LipProblem' not in val_dict:
+			if 'LipMIP' not in val_dict:
 				continue 
-			right_answer = val_dict['LipProblem']
+			right_answer = val_dict['LipMIP']
 			for k, v in val_dict.items():
 				if k not in rel_errors:
 					rel_errors[k] = []

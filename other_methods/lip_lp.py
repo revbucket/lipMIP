@@ -15,7 +15,7 @@ class LipLP(OtherResult):
         timer = utils.Timer()
 
         # Use the GurobiSquire / model constuctor in lipMIP file
-        lip_prob = lm.LipProblem(self.network, self.domain, self.c_vector,
+        lip_prob = lm.LipMIP(self.network, self.domain, self.c_vector,
                                  primal_norm=self.primal_norm, preact=preact_method)
         squire, timer = lip_prob.build_gurobi_squire()
 

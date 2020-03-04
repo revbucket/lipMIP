@@ -15,7 +15,7 @@ from hyperbox import Hyperbox
 from relu_nets import ReLUNet
 from neural_nets import data_loaders as dl
 from neural_nets import train
-from lipMIP import LipProblem
+from lipMIP import LipMIP
 from other_methods import CLEVER, FastLip, LipLP, LipSDP, NaiveUB, RandomLB, SeqLip
 from other_methods import LOCAL_METHODS, GLOBAL_METHODS
 from utilities import Factory, DoEvery
@@ -37,8 +37,8 @@ def main():
 	RANDOM_SEED = 420
 	DIMENSION_SERIES = None
 	NUM_POINT_SERIES = None
-	LOCAL_METHODS = [FastLip, LipLP, LipProblem]
-	GLOBAL_METHODS = [LipProblem, FastLip, LipLP, SeqLip, LipSDP, 
+	LOCAL_METHODS = [FastLip, LipLP, LipMIP]
+	GLOBAL_METHODS = [LipMIP, FastLip, LipLP, SeqLip, LipSDP, 
 					  NaiveUB, RandomLB]
 					  
 	exp_kwargs = {'c_vector': C_VECTOR,
@@ -52,9 +52,9 @@ def main():
 		return '%s_DIM%04d' % (NAME, network.layer_sizes[0])
 
 	def build_jobs(network, **exp_kwargs):
-		local_exp = Experiment([FastLip, LipLP, LipProblem], 
+		local_exp = Experiment([FastLip, LipLP, LipMIP], 
 							   network=network, **exp_kwargs)	
-		global_exp = Experiment([LipProblem, FastLip, LipLP, SeqLip, LipSDP, NaiveUB], 
+		global_exp = Experiment([LipMIP, FastLip, LipLP, SeqLip, LipSDP, NaiveUB], 
 								network=network, **exp_kwargs)
 		prefix = NAME_FXN(network)
 		#prefix = '%s_RELUS%02d' % (NAME, network.num_relus)
