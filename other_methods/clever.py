@@ -55,10 +55,9 @@ class CLEVER(OtherResult):
                     batch_max = max_grad_norm
 
             batch_maxes.append(batch_max)
-
         with utils.silent():
             batch_maxes = np.array(batch_maxes)
-            weibull_fit_results = get_best_weibull_fit(batch_maxes, 
+            weibull_fit_results = get_best_weibull_fit(batch_maxes,
                                                        **weibull_fit_kwargs)
 
         self.value =  -1 * weibull_fit_results[2]
@@ -112,6 +111,8 @@ def get_best_weibull_fit(sample, use_reg = False, shape_reg = 0.01,
     dist_range = np.amax(sample) - np.amin(sample)
     # if dist_range > 2.5:
     shape_rescale = dist_range
+    if shape_rescale < 1e-9:
+        shape_rescale = 1.0
     # else:
     #     shape_rescale = 1.0
     print("shape rescale = {}".format(shape_rescale))
