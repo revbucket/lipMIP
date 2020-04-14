@@ -323,6 +323,12 @@ def display_images(image_rows, figsize=(8, 8)):
 # =           Pytorch helpers                          =
 # ======================================================
 
+def tensorfy(x):
+	if isinstance(x, torch.Tensor):
+		return x 
+	else:
+		return torch.from_numpy(x)
+
 def seq_append(seq, module):
 	""" Takes a nn.sequential and a nn.module and creates a nn.sequential
 		with the module appended to it

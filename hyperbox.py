@@ -210,12 +210,12 @@ class Hyperbox(Domain):
             new_radii = utils.as_numpy(torch.abs(linear.weight)).dot(radii)
         else:
             print("MAPLIN BACK")
-            torch_mid = torch.Tensor(midpoint)
-            torch_radii = torch.Tensor(radii)
+            torch_mid = utils.tensorfy(midpoint)
+            torch_radii = utils.tensorfy(radii)
             new_midpoint = utils.as_numpy(linear.weight.t() @ torch_mid)
             new_radii = utils.as_numpy(linear.weight.t().abs() @ torch_radii)
 
-        return Hyperbox.from_midpoint_radii(new_midpoint, new_radii)
+        return Hyperbox.from_midpoint_radii(new_midpoint, new_radii)._dilate()
 
     def map_conv2d(self, network, index, forward=True):
 
@@ -260,10 +260,10 @@ class Hyperbox(Domain):
         """
         box_out = Hyperbox.from_twocol(np.maximum(self.as_twocol(), 0))
         box_out.shape = self.shape
-        return box_out
+        return box_out._dilate()
 
     def map_switch(self, bool_box):
-        return bool_box.map_switch(self)
+        return bool_box.map_switch(self)._dilate()
 
     def encode_as_gurobi_model(self, squire, key):
         model = squire.model 
@@ -284,6 +284,13 @@ class Hyperbox(Domain):
 
     def as_boolean_hbox(self):
         return BooleanHyperbox.from_hyperbox(self)
+
+    def _dilate(self, eps=1e-6):
+        print("_DILATE", eps)
+        self.radius += eps 
+        self._fixup
+        return self
+
 
     # ==========================================================================
     # =           Helper methods                                               =
