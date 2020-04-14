@@ -186,6 +186,8 @@ class ReLUNet(nn.Module):
         """ Returns the i^th hidden unit, which, is a pair of 
             (nn.Linear, nn.ReLU) objects, starting at index 0. 
         """
+        if i == -1:
+            return self.net[-1], nn.ReLU
         seq_start = 2 * i
         seq_out = self.net[seq_start: seq_start + 2]
         return (seq_out[0], seq_out[1])
@@ -401,3 +403,85 @@ class SubReLUNet(ReLUNet):
             output.append(new_net)
 
         return output
+
+
+
+class ConvNet(ReLUNet):
+    def __init__(self, sequential, input_chw, dtype=torch.float):
+        """ Wrapper for convolutional network:
+            can handle Linear, ReLU, and Conv2D layers
+        ARGS:
+            sequential - list or nn.Sequential of only Linear+conv2D layers
+                         (ReLU's and flattenings are added implicitly)
+            input_chw - tuple(int) - triple of input channels, height, width
+            dtype - torch.float/torch.double
+        """
+        if isinstance(sequential, list):
+            sequential = nn.Sequential(*sequential)
+        for layer in sequential:
+            if dtype == torch.float:
+                layer.float()
+            else:
+                layer.double()
+        assert all(isinstance(layer, (nn.Linear, nn.Conv2d))
+                   for el in sequential)
+        super(ConvNet, self).__init__(layer_sizes=sequential, dtype=dtype, 
+                                      manual_net=sequential)
+        self.num_relus = len(self.net) - 1
+        self.shapes = None
+        self.input_chw = input_chw
+        self._setup_shapes()
+
+    def _setup_shapes(self):
+        """Keeps track of all the chw's given the input chws for convs """
+        shapes = [self.input_chw]
+        for layer in self.net:
+            if isinstance(layer, nn.Conv2d):
+                shapes.append(utils.conv2d_counter(shapes[-1], layer))
+            elif isinstance(layer, nn.Linear):
+                shapes.append(layer.out_features)
+        self.shapes = shapes
+
+    def get_ith_input_shape(self, i):
+        """ Gets the shape of the tensor that gets fed into the 
+            i^th linear/conv layer 
+        """
+        return self.shapes[i]
+
+
+    def get_parameters(self):
+        return [el.parameters() for el in self.net]
+
+    def forward(self, x, return_preacts=False):
+        """ Standard forward method for ConvNets. 
+        If return_preacts is True, then we collect and return the 
+        values before applying each ReLU layer 
+        """
+        assert x.shape[1:] == self.input_chw
+
+        if isinstance(self.net[0], nn.Linear):
+            x = x.view(-1, self.net[0].in_features)
+
+        preacts = []
+        for i, layer in enumerate(self.net[:-1]):
+            x = layer(x)
+            if return_preacts:
+                preacts.append(torch.clone(x))
+            x = F.relu(x) 
+            if (isinstance(self.net[i + 1], nn.Linear) and 
+                isinstance(layer, nn.Conv2d)):
+                x = x.view(x.size(0), -1)
+        x = self.net[-1](x)
+        if return_preacts:
+            return preacts + [x]
+        else:
+            return x
+
+    def get_ith_hidden_unit(self, i):
+        """ Returns the i^th hidden unit, which, is a pair of 
+            (nn.Linear/nn.Conv2d, nn.ReLU) objects, starting at index 0. 
+        """
+        hidden_unit = self.net[i] 
+        return (hidden_unit, nn.ReLU)
+
+

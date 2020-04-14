@@ -359,6 +359,52 @@ def cudafy(tensor_iter):
 	return [safe_cuda(_) for _ in tensor_iter]
 
 
+def conv2d_counter(x_size, conv2d):
+	""" Returns the size of the output of a convolution operator 
+	ARGS:
+		x_size : tuple(int) - tuple of input sizes (c_in x H_in x W_in)
+		conv2d : nn.Conv2D object 
+	RETURNS:
+		the shape of the output 
+	"""
+	c_in, h_in, w_in = x_size
+	c_out = conv2d.out_channels 
+	k0, k1 = conv2d.kernel_size 
+	p0, p1 = conv2d.padding 
+	s0, s1 = conv2d.stride 
+
+	h_out = (h_in + 2 * p0 - k0) // s0 + 1 # round down apparently
+	w_out = (w_in + 2 * p1 - k1) // s1 + 1
+	return (c_out, h_out, w_out)
+
+
+def conv2d_mod(x, conv2d, bias=True, abs_kernel=False):
+	""" Helper method to do convolution suboperations:
+	ARGS:
+		x : tensor - input to convolutional layer
+		conv2d : nn.Conv2d - convolutional operator we 'modify'
+		bias: bool - true if we want to include bias, false o.w. 
+		abs_kernel : bool - true if we use the absolute value of the kernel
+	RETURNS:
+		tensor output 
+	"""
+	if bias:
+		bias = conv2d.bias 
+	else:
+		bias = None
+	if abs_kernel: 
+		weight = conv2d.weight.abs()
+	else:
+		weight = conv2d.weight
+
+	if x.dim() == 3:
+		x = x.unsqueeze(0)
+	return F.conv2d(x, weight=weight, bias=bias, stride=conv2d.stride,
+				    padding=conv2d.padding, dilation=conv2d.dilation,
+				    groups=conv2d.groups)
+
+
+
 # =======================================
 # =           Polytope class            =
 # =======================================

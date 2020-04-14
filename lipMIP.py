@@ -8,7 +8,7 @@ from pre_activation_bounds import PreactivationBounds
 import time
 import pprint
 import re
-from interval_analysis import HBoxIA
+from interval_analysis import AbstractNN, VALID_PREACTS
 import torch.nn as nn
 """
 
@@ -67,7 +67,7 @@ class LipMIP(utils.ParameterObject):
     - timeout: stops early (will replace with stopping criteria later)
     """
 
-    VALID_PREACTS = ['naive_ia'] # add improved_ia, LP
+    VALID_PREACTS = VALID_PREACTS
 
     def __init__(self, network, domain, c_vector, primal_norm='linf', 
                  preact='naive_ia', verbose=False, 
@@ -90,12 +90,12 @@ class LipMIP(utils.ParameterObject):
         network = self.network
         assert self.primal_norm in ['linf', 'l1'] # Meaning we want max ||grad(f)||_*
         assert (self.preact in self.VALID_PREACTS or
-                isinstance(self.preact, HBoxIA))
+                isinstance(self.preact, AbstractNN))
 
         timer = utils.Timer()
         # Step 1: Build the pre-ReLU and pre-switch hyperboxes
-        if not isinstance(self.preact, HBoxIA):
-            pre_bounds = HBoxIA(self.network, self.domain, self.c_vector)
+        if not isinstance(self.preact, AbstractNN):
+            pre_bounds = AbstractNN(self.network, self.domain, self.c_vector)
             pre_bounds.compute_forward(technique=self.preact)
             pre_bounds.compute_backward(technique=self.preact)
         else:

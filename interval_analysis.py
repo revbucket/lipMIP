@@ -1,13 +1,20 @@
 """ Techniques to pass domains through the operation of a neural net """
 import numpy as np
 from hyperbox import Hyperbox, BooleanHyperbox
+from zonotope import Zonotope
 from l1_balls import L1Ball
 import utilities as utils 
 import gurobipy as gb
+import torch 
+import torch.nn as nn
 
+global VALID_PREACTS
+VALID_PREACTS = set(['naive_ia', 'zonotope:deep', 'zonotope:smooth',
+						'zonotope:box', 'zonotope:switch', 
+						'zonotope:diag']) 
 
-class HBoxIA(object):
-	""" Class that holds all information about pushing Hyperboxes through 
+class AbstractNN(object):
+	""" Class that holds all information about pushing abstract domains through 
 		a neural network (and does backpropagation too).
 		We need a clear discussion about terminology/indices:
 		- Our neural net matches Regex: r/(LR)+L/ (going left to right)
@@ -18,7 +25,7 @@ class HBoxIA(object):
 		- the i^th Hidden Unit is the i^{th} (LR) block, starting with 0
 		- An input domain is a hyperbox over the input to the neural net 
 		  that we're pushing through the network 
-		- the i^th forward_box is the Hyperbox denoting the input to the 
+		- the i^th forward_domain is the abstract domain denoting the input to the 
 		  i^th ReLU, 
 		  e.g. 
 		  	f(x) = L2( ReLU( L1( ReLU( L0(x)))))
@@ -30,18 +37,17 @@ class HBoxIA(object):
 		- the backprop_domain is EITHER a 1-dimensional tensor OR a Domain 
 		  representing a tensor that the output vector can be.
 		- Backprop is represented by "Switches" where a switch function 
-		  takes in a Hyperbox and a BooleanHyperbox and maps to another 
-		  Hyperbox.
-		- the i^th backward_box is the Hyperbox denoting the input to the 
+		  takes in an abstract domain and a BooleanHyperbox and maps to another 
+		  abstract domain of the same type.
+		- the i^th backward_box is the abstract domain denoting the input to the 
 		  i^th switch
 		  		f(x) = c^T L2( ReLU1( L1( ReLU0( L0(x)))))
 		  Nabla f(x) = L0^T( Switch0( L1^T( Switch1( L2C, a1)), a0))
 								     ^              ^
-								     |              1st backward_box
+								     |              1st backward_domain
 								     |
-								     0^th backward_box
+								     0^th backward_domain
 	"""
-	VALID_TECHNIQUES = set(['naive_ia']) 
 
 	def __init__(self, network, input_domain, backprop_domain):
 		self.network = network
@@ -62,9 +68,9 @@ class HBoxIA(object):
 
 		self.backprop_domain = backprop_domain
 
-		self.forward_boxes = {}
+		self.forward_domains = {}
 		self.forward_switches = {}
-		self.backward_boxes = {}
+		self.backward_domains = {}
 
 		self.output_range = None
 		self.gradient_range = None
@@ -74,38 +80,46 @@ class HBoxIA(object):
 
 
 	def compute_forward(self, technique='naive_ia'):
-		assert technique in self.VALID_TECHNIQUES
+		assert technique in VALID_PREACTS
 
 		if technique == 'naive_ia':
-			linear_outs, final_output = self.forward_nia(self.input_domain,
-														 self.network)
-			self.forward_boxes = {i: linear_outs[i] 
-								  for i in range(len(linear_outs))}
-			self.forward_switches = {k: BooleanHyperbox.from_hyperbox(v)
-									 for k,v in self.forward_boxes.items()}
-			self.output_range = final_output
+			domain = 'hyperbox'
+			pf_kwargs = {}
+		elif technique.startswith('zonotope'):
+			domain = 'zonotope'
+			pf_kwargs = {'transformer': technique.split(':')[1]}
 
+		linear_outs, final_out  = self.forward_pushforward(self.input_domain,
+   									self.network, domain=domain, **pf_kwargs)
+
+		self.forward_domains = {i: linear_outs[i]
+							  for i in range(len(linear_outs))}
+		self.forward_switches = {k: v.as_boolean_hbox() 
+								 for k, v in self.forward_domains.items()}
+		self.output_range = final_out
 		self.forward_computed = True
 
 
 	def compute_backward(self, technique='naive_ia'):
-		assert technique in self.VALID_TECHNIQUES
+		assert technique in VALID_PREACTS
 		assert self.forward_computed
-
 		if technique == 'naive_ia':
-			linear_outs, final_output = self.backward_nia(self.backprop_domain, 
-														  self.network, 
-														  self.forward_switches)
-			self.backward_boxes = {i: linear_outs[i] for i in 
-								   range(len(linear_outs))}
-			self.gradient_range = final_output
-
+			domain = 'hyperbox'
+			pf_kwargs = {}
+		elif technique.startswith('zonotope'):
+			domain = 'zonotope'
+			pf_kwargs = {'transformer': technique.split(':')[1]}
+		linear_outs, final_out = self.backward_pushforward(self.backprop_domain,
+											self.network, self.forward_switches, 
+											domain=domain, **pf_kwargs)
+		self.backward_domains = {i: el for i, el in enumerate(linear_outs)}
+		self.gradient_range = final_out
 		self.backward_computed = True
 
 
 	def get_forward_box(self, i):
 		# Returns the input range to the i^th RELU
-		return self.forward_boxes[i]
+		return self.forward_domains[i]
 
 	def get_forward_switch(self, i):
 		# Returns the possible configurations of the i^th RELU
@@ -115,7 +129,7 @@ class HBoxIA(object):
 		# Returns the input range to the i^th SWITCH
 		if forward_idx:
 			i = self.idx_flip(i)
-		return self.backward_boxes[i]
+		return self.backward_domains[i]
 
 
 
@@ -147,7 +161,7 @@ class HBoxIA(object):
 		else:
 			backprop_domain = self.get_backward_box(self.idx_flip(stop))
 
-		new_obj = HBoxIA(subnetwork, input_domain, backprop_domain)
+		new_obj = AbstractNN(subnetwork, input_domain, backprop_domain)
 
 
 		# --- step 2: manually set the right attributes here
@@ -285,115 +299,136 @@ class HBoxIA(object):
 
 
 	# ===================================================================
-	# =           Naive Interval Analysis Techniques                    =
+	# =           Zonotope Abstract Interpration Techniques             =
 	# ===================================================================
 	@classmethod
-	def forward_nia(cls, input_hbox, network):
-		""" Computes the full forward pass of a neural network. 
-			Returns a list of hyperboxes where the i^th element in the 
-			hyperbox indices 
+	def forward_pushforward(cls, input_ai, network, domain=None,
+							**pushforward_kwargs):
+		""" Computes the full forward pass of a neural network.
+			Returns a list of abstract domains
 		ARGS:
-			input_hbox: Hyperbox that bounds inputs to the first linear layer
-			network: ReLUNet object 
+			input_ai: Hyperbox or Zonotope that bounds inputs to the first
+					  linear layer 
+			network : ReLUNet object 
+			domain: either 'hyperbox' or 'zonotope'
+			pushforward_kwargs : extra kwargs to be sent to the map_relu method
 		RETURNS:
 			(linear_outs, final_output)
-			- linear_outs[i]:  is the hyperbox denoting the range of 
-			   				   inputs to the i^th ReLU 
-			- final_output : Hyperbox representing the output after the 
-						     final layer 
+			- linear_outs[i]: is the abstract domain denoting the range of 
+							  inputs to the i^th ReLU 
+			- final_output: abstract domain representing the output after the 
+							final linear layer
 		"""
 
+		assert domain in ['hyperbox', 'zonotope']
+
+		if domain == 'zonotope':
+			input_ai = Zonotope.as_zonotope(input_ai)
+
 		linear_outs = []
-		relu_out = input_hbox
+		relu_out = input_ai 
 		for i in range(network.num_relus):
 			hidden_unit = network.get_ith_hidden_unit(i)
-			linear_out, relu_out = cls._forward_nia_layer(relu_out, hidden_unit)
+			linear_out, relu_out = cls._forward_pushforward_layer(
+											relu_out, network, i,
+					      					**pushforward_kwargs)
 			linear_outs.append(linear_out)
+		final_output = cls._forward_pushforward_layer(relu_out, network, -1,
+							 						  **pushforward_kwargs)[0]
+
+		return linear_outs, final_output
 
 
-		final_output = cls._forward_nia_layer(relu_out, (network.fcs[-1],))[0]
-		return linear_outs, final_output		
-
-	@classmethod 
-	def _forward_nia_layer(cls, input_hbox, hidden_unit):
-		""" Takes in a hyperbox and a hidden_unit and outputs two new 
-			hyperboxes, representing pushing the object through the hyperbox
+	@classmethod
+	def _forward_pushforward_layer(cls, input_ai, network, index, **pf_kwargs):
+		""" Takes in an abstract_domain and a hidden_unit and outputs two new 
+			abstract domains, representing pushing the object through the layer
 		ARGS:
-			input_hbox: Hyperbox object - represents input to this hyperbox 
-			hidden_unit: tuple like (nn.Linear, nn.ReLU) - represents the 
-						 operators we wish to map this hyperbox through
+			input_ai: Hyperbox or Zonotope - represents input to this hyperbox 
+			network:  ReLUNet or ConvNet object 
+			index :   which element of the sequential we are pushing forward 
 		RETURNS:
 			(linear_out, relu_out), two hyperboxes where 
 			Linear(input_hbox) is a subset of linear_out 
-			and 
+			and
 			ReLU(Linear(input_hbox)) is a subset of relu_out
-		"""	
-		linear_out = input_hbox.map_linear(hidden_unit[0])
-		relu_out = linear_out.map_relu()
-		return (linear_out, relu_out)
+		"""
+		hidden_unit = network.get_ith_hidden_unit(index)
+		if isinstance(hidden_unit[0], nn.Linear):
+			out = input_ai.map_linear(hidden_unit[0], forward=True)
+		elif isinstance(hidden_unit[0], nn.Conv2d):
+			out = input_ai.map_conv2d(network, index, forward=True)
+		else:
+			return NotImplementedError("Linear + Conv2D only!")
+		relu_out = out.map_relu()
+		return (out, relu_out)
 
 
 	@classmethod
-	def backward_nia(cls, input_hbox, network, forward_switches):
-		""" Computes backwards naive_interval analysis starting 
-			from an input hyperbox and forward switches
+	def backward_pushforward(cls, input_ai, network, forward_switches, 
+							 domain=None, **pushforward_kwargs):
+		""" Compute the full backwardpass of a neural network
+			Returns a list of abstract domains 
 		ARGS:
-			input_hbox: Hyperbox - range of inputs for the final 
-						layer the reluNet can be
-			network: ReLUNet - object to backprop against
-			forward_switches: dict - maps integers to BooleanHyperbox 
-							  instances representing the ReLUswitch 
-							  positions
+			input_ai : Hyperbox or Zonotope that bounds inputs to the gradient
+			network: ReLUNet object 
+			domain: either 'hyperbox' or 'zonotope'
+			pushforward_kwargs : extra_kwargs to be sent to the map_relu method 
 		RETURNS:
-			(linear_outs, final_output):
-			- linear_outs[i]:  is the hyperbox denoting the range of 
-			   				   inputs to the i^th switch
-			- final_output : Hyperbox representing the output after the 
-						     final linear layer
+			(linear_outs, final_output)
 		"""
-		linear_outs = []
-		switch_out = input_hbox
+		assert domain in ['hyperbox', 'zonotope']
+		if domain == 'zonotope':
+			input_ai = Zonotope.as_zonotope(input_ai)
 
 		# Handle the FINAL linear layer (going forward)
-		final_linear = network.fcs[-1]
-		linear_outs.append(input_hbox.map_linear(final_linear, forward=False))
+		final_layer = network.fcs[-1]
+		assert isinstance(final_layer, nn.Linear)
+		layer_outs = [input_ai.map_linear(final_layer, forward=False)]
 
 		# Now do all the hidden units
 		for i in range(network.num_relus - 1, -1, -1):
-			hidden_unit = network.get_ith_hidden_unit(i)			
-			layer_out = cls._backward_nia_layer(linear_outs[-1],
-  	  									        hidden_unit, 
-		  									    forward_switches[i])
-			linear_outs.append(layer_out[0])
+			layer_out = cls._backward_pushforward_layer(layer_outs[-1],
+		  	  									        network, i,
+				  									    forward_switches[i],
+				  									    **pushforward_kwargs)
+			layer_outs.append(layer_out[0])
 
-		return (linear_outs[:-1], linear_outs[-1])
+		return (layer_outs[:-1], layer_outs[-1])
 
 
-	@classmethod 
-	def _backward_nia_layer(cls, input_hbox, hidden_unit, switch_box):
-		""" Takes in a hyperbox and a hidden_unit (LR) and outputs two new 
-			hyperboxes. First we map through the backwards relu (switch)
-			using the input hbox and switch box. Then we map through the 
-			backwards linear layer. 
+	@classmethod
+	def _backward_pushforward_layer(cls, input_ai, network, index, switch_box,
+									**pf_kwargs):
+		""" Takes in an abstract element and hidden unit (LR) and outputs two 
+			new abstract elements. First we map through the backwards ReLU 
+			(switch) using the input_ai and switch_box, then we map through 
+			the backwards linear layer 
 		ARGS:
-			input_hbox: Hyperbox representing real inputs to the switch layer 
-			hidden_unit: tuple like (nn.Linear, nn.ReLU) - represents the 
-						 FORWARD direction of the operators we map the 
-						 input_hbox through 
+			input_ai : Zonotope or Hyperbox containing real inputs to switch 
+					   layer
+			network : ReLUNet or ConvNet object 
+			index : int - FORWARD index of which linear/conv operator we
+						  are mapping through
 			switch_box: BooleanHyperbox representing status of gates for 
 						switch layer 
 		RETURNS:
-			(linear_out, switch_out), two hyperboxes where 
-			linear_out is a superset of input_hbox mapped through any 
+			(layer_out, switch_out), two abstract_elements where 
+			switch_out is a superset of input_ai mapped through any 
 					   valid switch in switch_box, and the transpose of the 
 					   linear layer 
-			switch_out is a superset of the inputs in input_hbox mapped
-					   by any valid switch combo in switch_box
+			layer_out is a superset of the inputs in input_ai mapped through 
+					   the switch and then the linear/conv2d layer 
 		"""
-		linear, _ = hidden_unit
-		switch_out = switch_box.map_switch(input_hbox)
-		linear_out = switch_out.map_linear(linear, forward=False)
-		return (linear_out, switch_out)
-
+		print("BACKLAYER", index)
+		layer, _ = network.get_ith_hidden_unit(index)
+		switch_out = input_ai.map_switch(switch_box, **pf_kwargs)
+		if isinstance(layer, nn.Linear):
+			layer_out = switch_out.map_linear(layer, forward=False)
+		elif isinstance(layer, nn.Conv2d):
+			layer_out = switch_out.map_conv2d(network, index, forward=False)
+		else:
+			return NotImplementedError("Linear + Conv2D only!")		
+		return (layer_out, switch_out)
 
 

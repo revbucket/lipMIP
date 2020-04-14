@@ -8,7 +8,7 @@ import math
 from .other_methods import OtherResult 
 import utilities as utils 
 from pre_activation_bounds import PreactivationBounds
-from interval_analysis import HBoxIA
+from interval_analysis import AbstractNN
 
 class FastLip(OtherResult):
 
@@ -18,9 +18,9 @@ class FastLip(OtherResult):
 	def compute(self):
 		# Fast lip is just interval bound propagation through backprop
 		timer = utils.Timer()
-		preacts = HBoxIA(self.network, self.domain, self.c_vector)
-		preacts.compute_forward()
-		preacts.compute_backward()
+		preacts = AbstractNN(self.network, self.domain, self.c_vector)
+		preacts.compute_forward(technique='naive_ia')
+		preacts.compute_backward(technique='naive_ia')
 
 		backprop_box = preacts.gradient_range
 
