@@ -83,8 +83,8 @@ class Hyperbox(Domain):
         """
         dimension = twocol.shape[0]
         center = (twocol[:, 0] + twocol[:, 1]) / 2.0
-        radius =  np.maximum(abs(center - twocol[:, 0]), 
-                                abs(center - twocol[:, 1]))
+        radius =  torch.max(abs(center - twocol[:, 0]), 
+                            abs(center - twocol[:, 1]))
         return Hyperbox.from_dict({'dimension': dimension, 
                                    'center': center, 
                                    'radius': radius, 
@@ -115,7 +115,7 @@ class Hyperbox(Domain):
         """ Takes in a single numpy array and denotes this as the 
             hyperbox containing that point 
         """
-        c = utils.as_numpy(c)
+        c = utils.tensorfy(c)
         new_hbox = cls.from_dict({'center': c, 'radius': 0.0, 
                                   'box_low': c, 'box_hi': c,
                                   'dimension': len(c), 'is_vector': True})
@@ -146,12 +146,11 @@ class Hyperbox(Domain):
         RETURNS:
             Domain object
         """
-
-        x_np = utils.as_numpy(x)
-        shape = x_np.shape
-        x_np = x_np.reshape(-1)
-        domain = cls(x_np.size)
-        domain.center = x_np
+        x_tensor = utils.tensorfy(x)
+        shape = tuple(x_tensor.shape)
+        x_tensor = x_tensor.view(-1)
+        domain = cls(len(x_tensor))
+        domain.center = x_tensor
         domain.radius = radius
         domain.set_2dshape(shape)
         domain._fixup()
@@ -166,7 +165,7 @@ class Hyperbox(Domain):
         self.shape = shape
 
 
-    def random_point(self, num_points=1, tensor_or_np='np', 
+    def random_point(self, num_points=1, tensor_or_np='tensor', 
                      requires_grad=False):
         """ Returns a uniformly random point in this hyperbox
         ARGS:
@@ -176,19 +175,23 @@ class Hyperbox(Domain):
         RETURNS:
             (numpy array | tensor) of w/ shape (num_points, self.x.shape[0])
         """
+
         assert tensor_or_np in ['np', 'tensor']
         diameter = (self.box_hi - self.box_low)
-        shape = (num_points, self.dimension)
-        random_points = np.random.random((num_points, self.dimension))
-        random_points = random_points * diameter + self.box_low
+        rands = torch.rand_like(self.center.expand(num_points, self.dimension))
+        rand_points = rands * diameter + self.box_low
 
         if tensor_or_np == 'tensor':
-            return torch.tensor(random_points, requires_grad=requires_grad)
+            return rand_points.requires_grad_(requires_grad)
         else:
-            return random_points
+            return utils.as_numpy()
 
-    def as_twocol(self):
-        return np.stack([self.box_low, self.box_hi]).T
+    def as_twocol(self, tensor_or_np='tensor'):
+        twocol = torch.stack([self.box_low, self.box_hi]).T 
+        if tensor_or_np == 'tensor':
+            return twocol
+        else:
+            return twocol.numpy()
 
     def map_linear(self, linear, forward=True):
         """ Takes in a torch.Linear operator and maps this object through 
@@ -202,23 +205,17 @@ class Hyperbox(Domain):
         midpoint = (self.box_hi + self.box_low) / 2.0
         radii = (self.box_hi - self.box_low) / 2.0
         dtype = linear.weight.dtype
-        midpoint = torch.tensor(midpoint, dtype=dtype)
-        radii = torch.tensor(radii, dtype=dtype)
+        midpoint = utils.tensorfy(midpoint)
+        radii = utils.tensorfy(radii)
         if forward:
-
-            new_midpoint = utils.as_numpy(linear(midpoint))
-            new_radii = utils.as_numpy(torch.abs(linear.weight)).dot(radii)
+            new_midpoint = linear(midpoint)
+            new_radii = F.linear(radii, torch.abs(linear.weight), None)
         else:
-            print("MAPLIN BACK")
-            torch_mid = utils.tensorfy(midpoint)
-            torch_radii = utils.tensorfy(radii)
-            new_midpoint = utils.as_numpy(linear.weight.t() @ torch_mid)
-            new_radii = utils.as_numpy(linear.weight.t().abs() @ torch_radii)
-
-        return Hyperbox.from_midpoint_radii(new_midpoint, new_radii)._dilate()
+            new_midpoint = F.linear(midpoint, linear.weight.T, None)
+            new_radii = F.linear(radii, linear.weight.T.abs())
+        return Hyperbox.from_midpoint_radii(new_midpoint, new_radii)# ._dilate()
 
     def map_conv2d(self, network, index, forward=True):
-
         # Set shapes -- these are dependent upon direction
         input_shape = network.get_ith_input_shape(index)
         output_shape = network.get_ith_input_shape(index + 1)
@@ -228,27 +225,24 @@ class Hyperbox(Domain):
         conv2d = network.get_ith_hidden_unit(index)[0]
         assert isinstance(conv2d, nn.Conv2d)
         dtype = conv2d.weight.dtype
-        midpoint = torch.tensor(self.center, dtype=dtype).view(input_shape)
-        midpoint = midpoint.unsqueeze(0)
-        radii = torch.tensor(self.radius, dtype=dtype).view(input_shape)
-        radii = radii.unsqueeze(0)
+        midpoint = self.center.view((1,) + input_shape)
+        radii = self.radius.view((1,) + input_shape)
 
         if forward:
-            new_midpoint = utils.as_numpy(conv2d(midpoint).view(-1))
+            new_midpoint = conv2d(midpoint).view(-1)
             new_radii = utils.conv2d_mod(radii, conv2d, bias=False, 
-                                         abs_kernel=True)
-            new_radii = utils.as_numpy(new_radii.view(-1))
+                                         abs_kernel=True).view(-1)
         else:
             # Cheat and use torch autograd to do this for me
             mid_in = torch.zeros((1,) + output_shape, requires_grad=True)
             mid_out = (conv2d(mid_in) * midpoint).sum()
-            mid_out.backward()
-            new_midpoint = utils.as_numpy(mid_in.grad.data.view(-1))
+            new_midpoint = torch.autograd.grad(mid_out, mid_in)[0].view(-1)
+
 
             rad_in = torch.zeros((1,) + output_shape, requires_grad=True)
             rad_out = utils.conv2d_mod(rad_in, conv2d, abs_kernel=True)
-            (rad_out * radii).sum().backward()
-            new_radii = utils.as_numpy(rad_in.grad.data.view(-1))
+            new_radii = torch.autograd.grad((rad_out * radii).sum(), 
+                                            rad_in)[0].view(-1)
 
         hbox_out = Hyperbox.from_midpoint_radii(new_midpoint, new_radii,
                                             shape=output_shape)
@@ -258,12 +252,14 @@ class Hyperbox(Domain):
         """ Returns the hyperbox attained by mapping this hyperbox through 
             elementwise ReLU operators
         """
-        box_out = Hyperbox.from_twocol(np.maximum(self.as_twocol(), 0))
+        twocol = self.as_twocol(tensor_or_np='tensor')
+        new_bounds = torch.max(twocol, torch.zeros_like(twocol))
+        box_out = Hyperbox.from_twocol(new_bounds)
         box_out.shape = self.shape
-        return box_out._dilate()
+        return box_out # ._dilate()
 
     def map_switch(self, bool_box):
-        return bool_box.map_switch(self)._dilate()
+        return bool_box.map_switch(self)#._dilate()
 
     def encode_as_gurobi_model(self, squire, key):
         model = squire.model 
@@ -276,11 +272,19 @@ class Hyperbox(Domain):
         return gb_vars
 
     def contains(self, point):
-        """ Returns True if the provided point is in the hyperbox """
-        point = utils.as_numpy(point).reshape(-1)
-        assert len(point) == self.dimension
-        return all([lo_i <= point_i <= hi_i for (point_i, (lo_i, hi_i)) in 
-                    zip(point, self)])
+        """ Returns True if the provided point is in the hyperbox 
+        If point is a [N x dim] tensor, it returns the boolean array of 
+        this being true for all points
+        """
+        point = utils.tensorfy(point)
+        if point.dim() == 1:
+            point = point.view(1, -1)
+        lo_true = (point >= self.box_low.expand_as(point)).all(dim=1)
+        hi_true = (point <= self.box_hi.expand_as(point)).all(dim=1)
+        truths = lo_true & hi_true
+        if truths.numel == 1:
+            return truths.item()
+        return truths
 
     def as_boolean_hbox(self):
         return BooleanHyperbox.from_hyperbox(self)
@@ -305,24 +309,24 @@ class Hyperbox(Domain):
             self.box_hi = self.center + self.radius
 
         if isinstance(self.radius, numbers.Number):
-            self.radius = np.ones(self.dimension) * self.radius
+            self.radius = torch.ones_like(self.center) * self.radius
 
 
     def _add_box_bound(self, val, lo_or_hi='lo'):
         """ Adds lower bound box constraints
         ARGS:
-            val: float or np.array(self.dimension) -- defines the coordinatewise
-                 bounds bounds
-            lo_or_hi: string ('lo' or 'hi') -- defines if these are lower or upper
-                      bounds
+            val: float or torch.tensor(self.dimension) -- defines the 
+                 coordinatewise bounds
+            lo_or_hi: string ('lo' or 'hi') -- defines if these are lower or 
+                      upper bounds
         RETURNS:
             None
         """
         if isinstance(val, numbers.Real):
             val = self._number_to_arr(val)
 
-        attr, comp = {'lo': ('box_low', np.maximum),
-                      'hi': ('box_hi', np.minimum)}[lo_or_hi]
+        attr, comp = {'lo': ('box_low', torch.max),
+                      'hi': ('box_hi', torch.min)}[lo_or_hi]
 
         if getattr(self, attr) is None:
             setattr(self, attr, val)
@@ -334,7 +338,7 @@ class Hyperbox(Domain):
     def _number_to_arr(self, number_val):
         """ Converts float to array of dimension self.dimension """
         assert isinstance(number_val, numbers.Real)
-        return np.ones(self.dimension) * number_val
+        return torch.ones_like(self.center) * number_val
 
 
 
@@ -348,8 +352,7 @@ class BooleanHyperbox:
     def from_hyperbox(cls, hbox):
         """ Takes a hyperbox and represents the orthants it resides in
         """
-
-        values = np.zeros(hbox.dimension)
+        values = torch.zeros(hbox.dimension, dtype=torch.int8)
         values[hbox.box_low > 0] = 1
         values[hbox.box_hi < 0] = -1
         return BooleanHyperbox(values)
@@ -357,7 +360,7 @@ class BooleanHyperbox:
     @classmethod
     def from_zonotope(cls, zonotope):
         """ Takes a zonotope and represents the orthants in resides in """
-        values = np.zeros(zonotope.dimension)
+        values = torch.zeros(zonotope.dimension, dtype=torch.int8)
         values[zonotope.lbs > 0] = 1
         values[zonotope.ubs < 0] = -1
         return BooleanHyperbox(values)
@@ -367,7 +370,7 @@ class BooleanHyperbox:
         """ Values gets stored as its numpy array of type np.int8 
             where all values are -1, 0, 1 (0 <=> ? <=> {-1, +1})
         """
-        self.values = utils.as_numpy(values).astype(np.int8)
+        self.values = utils.tensorfy(values).type(torch.int8)
         self.dimension = len(self.values)
 
     def __getitem__(self, idx):
@@ -389,24 +392,25 @@ class BooleanHyperbox:
         RETURNS: 
             hyperbox with element-wise switch's applied
         """
-        print("MAPSWITCH")
+        eps = 1e-8
         switch_off = self.values < 0
         switch_on = self.values > 0
         switch_q = self.values == 0
 
         # On case by default
-        new_lows = np.copy(hyperbox.box_low)
-        new_highs = np.copy(hyperbox.box_hi)
+        new_lows = torch.clone(hyperbox.box_low)
+        new_highs = torch.clone(hyperbox.box_hi)
 
         # Handle the off case
-        new_lows[switch_off] = 0.0
-        new_highs[switch_off] = 0.0
+        new_lows[switch_off] = -eps
+        new_highs[switch_off] = +eps
 
         # Handle the uncertain case
-        new_lows[np.logical_and(switch_q, (hyperbox.box_low > 0))] = 0.0
-        new_highs[np.logical_and(switch_q, (hyperbox.box_hi < 0))] = 0.0
+        new_lows[switch_q & (hyperbox.box_low > 0)] = -eps
+        new_highs[switch_q & (hyperbox.box_hi < 0)] = +eps
 
-        box_out = Hyperbox.from_twocol(np.stack([new_lows, new_highs]).T)
+
+        box_out = Hyperbox.from_twocol(torch.stack([new_lows, new_highs]).T)
         box_out.shape = hyperbox.shape
         return box_out
 

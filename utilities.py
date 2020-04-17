@@ -325,7 +325,7 @@ def display_images(image_rows, figsize=(8, 8)):
 
 def tensorfy(x):
 	if isinstance(x, torch.Tensor):
-		return x 
+		return x
 	else:
 		return torch.from_numpy(x)
 

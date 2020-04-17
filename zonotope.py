@@ -15,12 +15,14 @@ class Zonotope(Domain):
                  center=None,
                  generator=None,
                  lbs=None,
-                 ubs=None):
+                 ubs=None, 
+                 shape=None):
         self.dimension = dimension 
         self.center = center # numpy ARRAY
         self.generator = generator # numpy 2D Array (matrix)
         self.lbs = lbs # Array
         self.ubs = ubs # Array 
+        self.shape = shape # tuple of 2d-shape (for convs), possibly None
 
 
     def __getitem__(self, idx):
@@ -39,14 +41,17 @@ class Zonotope(Domain):
     @classmethod
     def from_hyperbox(cls, hyperbox):
         """ Takes in a Hyperbox object and returns an equivalent zonotope """
-        generator = np.diag(hyperbox.radius)
+        generator = torch.diag(hyperbox.radius)
 
         return cls(hyperbox.dimension,
                    center=hyperbox.center,
                    generator=generator,
                    lbs=hyperbox.box_low,
-                   ubs=hyperbox.box_hi)
+                   ubs=hyperbox.box_hi, 
+                   shape=hyperbox.shape)
 
+    def set_2dshape(self, shape):
+        self.shape = shape
 
     def map_linear(self, linear, forward=True):
         """ Takes in a torch.Linear operator and maps this object through 
@@ -55,35 +60,63 @@ class Zonotope(Domain):
             linear : nn.Linear object - 
             forward: boolean - if False, we map this 'backward' as if we
                       were doing backprop
-        """     
+        """
         assert isinstance(linear, nn.Linear)
         dtype = linear.weight.dtype 
 
-        center = torch.tensor(self.center, dtype=dtype)
-        generator = torch.tensor(self.generator, dtype=dtype)
-        if forward: 
+        if forward:
             new_dimension = linear.out_features
-            new_center = utils.as_numpy(linear(center))
-            new_generator = utils.as_numpy(linear.weight.mm(generator))
+            new_center = linear(self.center)
+            new_generator = linear.weight.mm(self.generator)
         else:
             new_dimension = linear.in_features
-            new_center = utils.as_numpy(linear.weight.T.mv(center))
-            new_generator = utils.as_numpy(linear.weight.T.mm(generator))
+            new_center = linear.weight.T.mv(self.center)
+            new_generator = linear.weight.T.mm(self.generator)
         # Return new zonotope
         new_zono = Zonotope(dimension=new_dimension,
                             center=new_center,
                             generator=new_generator)
         new_zono._set_lbs_ubs()
-        return new_zono
+        return new_zono #.pca_reduction()
 
     def map_conv2d(self, network, index, forward=True):
-        conv2d = network.get_ith_hidden_unit(index)
-        assert isintsance(conv2d, nn.Conv2d)
+        # Set shapes -- these are dependent upon direction
+        input_shape = network.get_ith_input_shape(index)
+        output_shape = network.get_ith_input_shape(index + 1)
+        if not forward:
+            input_shape, output_shape = output_shape, input_shape
 
-        dtype = conv2d.dtype
 
-        center = torch.tensor(self.center, dtype=dtype).view()
-        pass
+        conv2d = network.get_ith_hidden_unit(index)[0]
+        # Strategy to do forward pass is to map each element of generator
+        # through conv without bias (and center gets the bias)
+        center = self.center.view((1,) + input_shape)
+        generator = self.generator.T.view((-1,) + input_shape)
+        gen_cols = self.generator.shape[1]
+
+        if forward:
+            new_center = conv2d(center).view(-1)
+            new_generator = utils.conv2d_mod(generator, conv2d, bias=False,
+                                             abs_kernel=False)
+            new_generator = new_generator.view((gen_cols,) + (-1,)).T
+
+        else:
+            # Cheat and use torch autograd to do this for me 
+            center_in = torch.zeros((1,) + output_shape, requires_grad=True)
+            center_out = (conv2d(center_in) * center).sum() 
+            new_center = torch.autograd.grad(center_out, center_in)[0].view(-1)
+
+            gen_in = torch.zeros((gen_cols,) + output_shape, 
+                                 requires_grad=True)
+            gen_out = utils.conv2d_mod(gen_in, conv2d, bias=False, 
+                                       abs_kernel=False)
+            new_gen = torch.autograd.grad((gen_out * generator).sum(), gen_in)[0]
+            new_generator = new_gen.view((gen_cols, -1)).T
+
+        new_zono = Zonotope(dimension=new_center.numel(), center=new_center, 
+                            generator=new_generator, shape=output_shape)
+        new_zono._set_lbs_ubs()
+        return new_zono
 
 
     def map_relu(self, transformer='deep'):
@@ -111,14 +144,16 @@ class Zonotope(Domain):
 
 
     def _apply_single_outputs(self, single_outputs):
-        new_center = np.array([_[0] for _ in single_outputs])
-        new_generator = np.vstack([_[1] for _ in single_outputs])
+        new_center = torch.Tensor([_[0] for _ in single_outputs])
+        new_generator = torch.stack([_[1] for _ in single_outputs])
         new_cols = [_[2] for _ in single_outputs if _[2] is not None]
         if len(new_cols) > 0:
-            new_generator = np.hstack([new_generator, np.vstack(new_cols).T])
+            new_generator = torch.cat([new_generator, 
+                                       torch.stack(new_cols).T], dim=1)
         new_zono = Zonotope(dimension=self.dimension,
                             center=new_center,
-                            generator=new_generator)
+                            generator=new_generator,
+                            shape=self.shape)
         new_zono._set_lbs_ubs()
         return new_zono
 
@@ -127,14 +162,45 @@ class Zonotope(Domain):
         """ Takes in a Zonotope object without self.lbs, self.ubs set
             and modifies these attributes 
         """
-        radii = np.abs(self.generator).sum(1)
+        radii = torch.abs(self.generator).sum(1)
         self.lbs = self.center - radii
         self.ubs = self.center + radii 
 
-
     def as_hyperbox(self):
-        twocol = np.vstack([self.lbs, self.ubs]).T
-        return Hyperbox.from_twocol(twocol)
+        if self.lbs is None or self.ubs is None:
+            self._set_lbs_ubs()
+        twocol = torch.stack([self.lbs, self.ubs]).T
+        box_out = Hyperbox.from_twocol(twocol)
+        box_out.set_2dshape(self.shape)
+        return box_out
+
+    def pca_reduction(self):
+        """ PCA order reduction technique from 
+            'Methods for order reduction of zonotopes' (Kopetzki et al)
+        """
+        # 1) center the generator and compute SVD
+        column_mean = torch.mean(self.generator, dim=1, keepdim=True)
+        center_gen = self.generator - column_mean
+        U, S, V = torch.svd(center_gen, some=True)
+
+        # 2) Map zonotope through the U, and turn into a box 
+        new_center = U.T.mv(self.center)
+        new_generator = U.T.mm(self.generator)
+        intermed_zono = Zonotope(dimension=self.dimension, 
+                                 center=new_center,
+                                 generator=new_generator, 
+                                 shape=self.shape)
+        new_zono = Zonotope.from_hyperbox(intermed_zono.as_hyperbox())
+
+        # 3) Go from box back to rotated space
+        final_center = U.mv(new_zono.center)
+        final_generator = U.mm(new_zono.generator)
+        final_zono = Zonotope(dimension=self.dimension,
+                              center=final_center,
+                              generator=final_generator,
+                              shape=self.shape)
+        final_zono._set_lbs_ubs()
+        return final_zono
 
     def as_boolean_hbox(self):
         return BooleanHyperbox.from_zonotope(self)
@@ -155,7 +221,7 @@ class Zonotope(Domain):
         gb_vars = [model.addVar(lb=-1.0, ub=1.0) 
                    for i in range(self.generator.shape[1])]
         for i in range(self.dimension):
-            model.addConstr(point[i] - self.center[i] == 
+            model.addConstr(point[i].item() - self.center[i].item() == 
                             gb.LinExpr(self.generator[i], gb_vars))
 
         model.update()
@@ -245,15 +311,15 @@ class Zonotope(Domain):
         if self.lbs[i] >= 0:
             return (self.center[i], self.generator[i], None)
         if self.ubs[i] <= 0:
-            return (0, np.zeros(self.generator.shape[1]), None)
+            return (0, torch.zeros(self.generator.shape[1]), None)
 
     def zbox_single(self, i):
         if self.lbs[i] * self.ubs[i] >= 0:
             return self._z_known(i)
 
         center_coord = self.ubs[i] / 2.0
-        gen_row = np.zeros(self.generator.shape[1])
-        gen_col = np.zeros(self.dimension)
+        gen_row = torch.zeros(self.generator.shape[1])
+        gen_col = torch.zeros(self.dimension)
         gen_col[i] = self.ubs[i] / 2.0
 
         return (center_coord, gen_row, gen_col)
@@ -264,7 +330,7 @@ class Zonotope(Domain):
 
         center_coord = self.center[i] - self.lbs[i] / 2.0 
         gen_row = self.generator[i]
-        gen_col = np.zeros(self.dimension)
+        gen_col = torch.zeros(self.dimension)
         gen_col[i] = -self.lbs[i] / 2.0
 
 
@@ -296,9 +362,9 @@ class Zonotope(Domain):
             new_col = None 
         else:
             if zbox_col is None:
-                zbox_col = np.zeros(self.dimension)
+                zbox_col = torch.zeros(self.dimension)
             if zdiag_col is None:
-                zdiag_col = np.zeros(self.dimension)
+                zdiag_col = torch.zeros(self.dimension)
             new_col = zbox_col * zbox_weight + zdiag_col * zdiag_weight
 
         return (new_center, new_row, new_col)
@@ -312,7 +378,7 @@ class Zonotope(Domain):
         mu_ = -1 * self.ubs[i] * self.lbs[i] / (self.ubs[i] - self.lbs[i])
         new_center = self.center[i] * lambda_ + mu_
         new_row = self.generator[i] * lambda_
-        new_col = np.zeros(self.dimension)
+        new_col = torch.zeros(self.dimension)
         new_col[i] = lambda_ * self.center[i] + mu_ +1e-6
         return (new_center, new_row, new_col)
 
@@ -331,15 +397,15 @@ class Zonotope(Domain):
             return (self.center[i], self.generator[i], None)
 
         if bool_box[i] == -1:
-            return (0, np.zeros(self.generator.shape[1]), None)
+            return (0, torch.zeros(self.generator.shape[1]), None)
 
 
     def sBox_single(self, i, bool_box):
         if bool_box[i] != 0:
             return self._s_known(i, bool_box)
 
-        gen_row = np.zeros(self.generator.shape[1])
-        gen_col = np.zeros(self.dimension)
+        gen_row = torch.zeros(self.generator.shape[1])
+        gen_col = torch.zeros(self.dimension)
         if self.lbs[i] >= 0:
             center_coord = self.ubs[i] / 2.0
             gen_col[i] = self.ubs[i] / 2.0
@@ -357,7 +423,7 @@ class Zonotope(Domain):
             return self._s_known(i, bool_box)
 
         gen_row = self.generator[i]
-        gen_col = np.zeros(self.dimension)
+        gen_col = torch.zeros(self.dimension)
 
         if self.lbs[i] >= 0: 
             center_coord = self.center[i] - self.ubs[i] / 2.0 
@@ -378,11 +444,11 @@ class Zonotope(Domain):
             return self.sBox_single(i, bool_box)
 
         range_ = self.ubs[i] - self.lbs[i]
-        gen_col = np.zeros(self.dimension)        
+        gen_col = torch.zeros(self.dimension)
         if self.ubs[i] >= -self.lbs[i]:
             lambda_ = -self.lbs[i] / range_
             center_coord = (lambda_ * self.center[i] + self.ubs[i] / 2.0 +
-                            + self.ubs[i] *self.lbs[i] / range_)
+                            self.ubs[i] *self.lbs[i] / range_)
             gen_row = lambda_ * self.generator[i]
             gen_col[i] = self.ubs[i] / 2.0
         else:

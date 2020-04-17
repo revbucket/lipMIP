@@ -63,7 +63,8 @@ class AbstractNN(object):
 				radius = 1.0
 			else:
 				radius = 2.0
-			backprop_domain = Hyperbox.build_linf_ball(np.zeros(output_dim), radius)
+			backprop_domain = Hyperbox.build_linf_ball(torch.zeros(output_dim), 
+													   radius)
 
 
 		self.backprop_domain = backprop_domain
@@ -420,7 +421,6 @@ class AbstractNN(object):
 			layer_out is a superset of the inputs in input_ai mapped through 
 					   the switch and then the linear/conv2d layer 
 		"""
-		print("BACKLAYER", index)
 		layer, _ = network.get_ith_hidden_unit(index)
 		switch_out = input_ai.map_switch(switch_box, **pf_kwargs)
 		if isinstance(layer, nn.Linear):
