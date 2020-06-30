@@ -415,7 +415,10 @@ class BooleanHyperbox:
         return box_out
 
 
-
+    def zero_val(self):
+        # Returns a boolean hbox with all values set to zero 
+        return BooleanHyperbox(torch.zeros_like(self.values))
+        
 
 
 

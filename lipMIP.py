@@ -830,3 +830,39 @@ def set_l1_objective(squire, abs_key):
 
 
 # ======  End of             LAYERWISE HELPERS                      =======
+
+
+def naive_mip(relu_net, c_vec, primal_norm='linf', verbose=False, num_threads=2):
+    """ Does the most naive MIP possible -- all sign configurations attainable"""
+
+    with utils.silent():
+        model = gb.Model()
+    model.setParam('OutputFlag', verbose)
+    model.setParam('Threads', num_threads)
+
+    # Now do layerwise helpers in the backwards direction only 
+    input_dim = relu_net.layer_sizes[0]
+    output_dim = relu_net.layer_sizes[-1]
+
+    # Get preact bounds (globally)
+    input_domain = Hyperbox.build_unit_hypercube(input_dim)
+    ai_box = AbstractNN(relu_net, input_domain, c_vec)
+    ai_box.compute_forward()
+    ai_box.backward_domains = {k: v.zero_val() for k,v
+                               in ai_box.backward_domains.items()}
+    ai_box.compute_backward()
+
+    # Build squire so we can use existing tools 
+    squire = GurobiSquire(relu_net, model, pre_bounds=ai_box)
+    # Add dummy ReLU constraints 
+    for layer_no in range(1, relu_net.num_relus + 1):
+        name = 'relu_%s' % layer_no 
+        namer = utils.build_var_namer(name)
+        relu_vars = {i: model.addVar(vtype=gb.GRB.BINARY, name=namer(i))
+                     for i in range(relu_net.layer_sizes[layer_no])}
+        squire.set_vars(name, relu_vars)
+
+    build_back_pass_constraints(squire)
+    build_objective(squire, primal_norm)
+
+    return squire

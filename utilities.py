@@ -329,6 +329,21 @@ def tensorfy(x):
 	else:
 		return torch.from_numpy(x)
 
+
+def one_hot(labels, num_classes):
+	""" Take a minibatch of labels and makes them 1-hot encoded """
+	labels = labels.view(-1, 1)
+	one_hot_vecs = torch.zeros(labels.numel(), num_classes)
+	one_hot_vecs.scatter_(1, labels, 1)
+	labels = labels.view(-1)
+	return one_hot_vecs
+
+def one_hot_training_data(trainset, num_classes):
+	output = []
+	for data, labels in trainset:
+		output.append((data, one_hot(labels, num_classes)))
+	return output 
+
 def seq_append(seq, module):
 	""" Takes a nn.sequential and a nn.module and creates a nn.sequential
 		with the module appended to it

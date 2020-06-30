@@ -302,6 +302,25 @@ class XEntropyReg(Regularizer):
 			outputs = self.network(examples)
 		return self.scalar * nn.CrossEntropyLoss()(outputs, labels)
 
+class MSEReg(Regularizer):
+	def __init__(self, num_classes, network=None, scalar=1.0):
+		super(MSEReg, self).__init__(scalar)
+		self.num_classes = num_classes
+		self.network = network 
+		self.requires_ff = True 
+
+
+	def __repr__(self):
+		return 'MSE: (scalar: %.02e)' % self.scalar
+
+	def forward(self, examples, labels, outputs=None):
+
+		if outputs is None:
+			outputs = self.network(examples)
+		one_hot = F.one_hot(labels).type(outputs.dtype)
+		return self.scalar * nn.MSELoss()(outputs, one_hot)
+
+
 
 class LpWeightReg(Regularizer):
 	def __init__(self, network=None, scalar=1.0, lp='l1'):

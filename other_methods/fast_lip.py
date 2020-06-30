@@ -1,6 +1,6 @@
 """ Lipschitz (over)Estimation from this paper/repo:
-	Arxiv: https://arxiv.org/abs/1804.09699
-	Github: https://github.com/huanzhang12/CertifiedReLURobustness
+    Arxiv: https://arxiv.org/abs/1804.09699
+    Github: https://github.com/huanzhang12/CertifiedReLURobustness
 """
 
 import numpy as np
@@ -12,25 +12,25 @@ from interval_analysis import AbstractNN
 
 class FastLip(OtherResult):
 
-	def __init__(self, network, c_vector, domain, primal_norm):
-		super(FastLip, self).__init__(network, c_vector, domain, primal_norm)
+    def __init__(self, network, c_vector, domain, primal_norm):
+        super(FastLip, self).__init__(network, c_vector, domain, primal_norm)
 
-	def compute(self):
-		# Fast lip is just interval bound propagation through backprop
-		timer = utils.Timer()
-		preacts = AbstractNN(self.network, self.domain, self.c_vector)
-		preacts.compute_forward(technique='naive_ia')
-		preacts.compute_backward(technique='naive_ia')
+    def compute(self):
+        # Fast lip is just interval bound propagation through backprop
+        timer = utils.Timer()
+        preacts = AbstractNN(self.network, self.domain, self.c_vector)
+        preacts.compute_forward(technique='naive_ia')
+        preacts.compute_backward(technique='naive_ia')
 
-		backprop_box = preacts.gradient_range
+        backprop_box = preacts.gradient_range
 
-		# Worst case vector is max([abs(lo), abs(hi)])
-		self.worst_case_vec = np.maximum(abs(backprop_box.box_low),
-										 abs(backprop_box.box_hi))
-		# And take dual norm of this
-		dual_norm = {'linf': 1, 'l1': np.inf, 'l2': 2}[self.primal_norm]
-		value = np.linalg.norm(self.worst_case_vec, ord=dual_norm)
+        # Worst case vector is max([abs(lo), abs(hi)])
+        self.worst_case_vec = np.maximum(abs(backprop_box.box_low.detach()),
+                                         abs(backprop_box.box_hi.detach()))
+        # And take dual norm of this
+        dual_norm = {'linf': 1, 'l1': np.inf, 'l2': 2}[self.primal_norm]
+        value = np.linalg.norm(self.worst_case_vec, ord=dual_norm)
 
-		self.value = value
-		self.compute_time = timer.stop()
-		return value
+        self.value = value
+        self.compute_time = timer.stop()
+        return value

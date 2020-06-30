@@ -8,7 +8,9 @@ import numpy as np
 import numbers 
 import utilities as utils 
 import gurobipy as gb
+
 from hyperbox import Domain, Hyperbox, BooleanHyperbox
+
 
 class Zonotope(Domain):
     def __init__(self, dimension, 
@@ -23,7 +25,7 @@ class Zonotope(Domain):
         self.lbs = lbs # Array
         self.ubs = ubs # Array 
         self.shape = shape # tuple of 2d-shape (for convs), possibly None
-
+        self._set_lbs_ubs()
 
     def __getitem__(self, idx):
         return self.lbs[idx], self.ubs[idx]
@@ -52,6 +54,16 @@ class Zonotope(Domain):
 
     def set_2dshape(self, shape):
         self.shape = shape
+
+    def y(self, y_tensor): 
+        """ Returns a tensor of points in R^n given their generating ys 
+        ARGS: 
+            y_tensor: tensor shape (k, m) or (m)
+        RETURNS:
+            tensor of center + E @ y_tensor
+        """
+        return self.center + (self.generator @ y_tensor.unsqueeze(-1)).squeeze(-1)
+
 
     def map_linear(self, linear, forward=True):
         """ Takes in a torch.Linear operator and maps this object through 
@@ -119,7 +131,7 @@ class Zonotope(Domain):
         return new_zono
 
 
-    def map_relu(self, transformer='deep'):
+    def map_relu(self, transformer='deep', add_new_cols=True):
 
         single_method = {'box': self.zbox_single,
                          'diag': self.zdiag_single,
@@ -127,11 +139,11 @@ class Zonotope(Domain):
                          'smooth': self.zsmooth_single,
                          'deep': self.deepz_single}[transformer]
         single_outputs = [single_method(i) for i in range(self.dimension)]
-        return self._apply_single_outputs(single_outputs)
+        return self._apply_single_outputs(single_outputs, 
+                                          add_new_cols=add_new_cols)
 
 
-
-    def map_switch(self, bool_box, transformer='deep'):
+    def map_switch(self, bool_box, transformer='deep', add_new_cols=True):
         """ Returns a new zonotope corresponding to a switch function applied 
             to all elements in self, with the given boolean-hyperbox 
         """
@@ -140,14 +152,16 @@ class Zonotope(Domain):
                          'deep': self.deepS_single}[transformer]
         single_outputs = [single_method(i, bool_box) 
                           for i in range(self.dimension)]
-        return self._apply_single_outputs(single_outputs)
+        return self._apply_single_outputs(single_outputs, 
+                                          add_new_cols=add_new_cols)
 
 
-    def _apply_single_outputs(self, single_outputs):
-        new_center = torch.Tensor([_[0] for _ in single_outputs])
-        new_generator = torch.stack([_[1] for _ in single_outputs])
+    def _apply_single_outputs(self, single_outputs, add_new_cols=True):
+        new_center = torch.tensor([_[0] for _ in single_outputs], 
+                                  dtype=torch.float64)
+        new_generator = torch.stack([_[1] for _ in single_outputs]).double()
         new_cols = [_[2] for _ in single_outputs if _[2] is not None]
-        if len(new_cols) > 0:
+        if len(new_cols) > 0 and add_new_cols:
             new_generator = torch.cat([new_generator, 
                                        torch.stack(new_cols).T], dim=1)
         new_zono = Zonotope(dimension=self.dimension,
@@ -162,6 +176,8 @@ class Zonotope(Domain):
         """ Takes in a Zonotope object without self.lbs, self.ubs set
             and modifies these attributes 
         """
+        if self.center is None or self.generator is None:
+            return 
         radii = torch.abs(self.generator).sum(1)
         self.lbs = self.center - radii
         self.ubs = self.center + radii 
@@ -205,24 +221,27 @@ class Zonotope(Domain):
     def as_boolean_hbox(self):
         return BooleanHyperbox.from_zonotope(self)
 
-    def contains(self, point):
+    def contains(self, point, indices=None):
         """ Takes in a numpy array of length self.dimension and returns True/False
             depending if point is contained in the zonotope.
             We naively just solve this with a linear program 
         ARGS:
             point: np.array - point to check membership of 
+            indices: if not None, only looks at the subset of indices
         RETURNS:
             boolean
         """
+        if indices is None:
+            indices = range(self.dimension)
         with utils.silent():
             model = gb.Model() 
         model.setParam('OutputFlag', False)
 
         gb_vars = [model.addVar(lb=-1.0, ub=1.0) 
                    for i in range(self.generator.shape[1])]
-        for i in range(self.dimension):
-            model.addConstr(point[i].item() - self.center[i].item() == 
-                            gb.LinExpr(self.generator[i], gb_vars))
+        for i, idx in enumerate(indices):
+            model.addConstr(point[i].item() - self.center[idx].item() == 
+                            gb.LinExpr(self.generator[idx], gb_vars))
 
         model.update()
         model.optimize()
@@ -299,6 +318,98 @@ class Zonotope(Domain):
         """
         return max([max(abs(self.lbs)), max(abs(self.ubs))])
 
+
+    def check_orthants(self, coords, orthant_list=None):
+        """ Checks which orthants are feasible in this zonotope 
+        ARGS:
+            coords: int[], which coordinate indices we consider the 
+                    restriction to 
+            orthant_list: None or list of possible orthants (like 
+                             ['00', '01', '11,...] 
+        RETURNS:
+            dict with all orthants checked, and False if infeasible and 
+            a proof of orthant intersection otherwise 
+        """
+        # Generate orthants to check: 
+        def generate_power_set(n, init_list=None):
+            if init_list is None:
+                init_list = ['0', '1']
+            if n == 1:
+                return init_list
+            return generate_power_set(n - 1, [_ + b for _ in init_list 
+                                                    for b in ['0', '1']])
+
+        if orthant_list is None:
+            orthant_list = generate_power_set(len(coords))
+
+        # Now check each orthant 
+        model = None 
+        output_dict = {} 
+        for orthant in orthant_list: 
+            output, model = self._check_single_orthant(coords, orthant, 
+                                                       model=model)
+            output_dict[orthant] = output
+
+        return output_dict
+
+    def _check_single_orthant(self, coords, single_orthant, model=None):
+        """ Checks feasibility of a single orthant wrt some coords
+            of the zonotope 
+        ARGS:
+            coords: int[] list of coordinates to check only 
+            single_orthant: binary string that corresponds to which orthants
+                            to check
+            model: gurobi model (if it exists), only needs to be changed
+                   if a new model is proposed 
+        """
+        assert len(coords) == len(single_orthant)
+        x_namer = utils.build_var_namer('x')
+        z_constr_namer = utils.build_var_namer('z_constr')
+        # Build model if doesn't exist
+        if model is None:
+            with utils.silent():
+                model = gb.Model() 
+                model.setParam('OutputFlag', False)
+            # Add variables for x, y 
+            y_vars = [model.addVar(lb=-1, ub=1) 
+                      for _ in range(self.generator.shape[1])]
+            x_vars = [model.addVar(lb=self.lbs[i]-1, ub=self.ubs[i] + 1, name=x_namer(i))
+                      for i in coords]
+
+            # Add linExpressions for each x,y 
+            for index, i in enumerate(coords):
+                model.addConstr(self.center[i].item() + gb.LinExpr(self.generator[i], y_vars) ==\
+                                x_vars[index])
+            z_var = model.addVar(lb=0.0, name='z')
+            model.setObjective(z_var, gb.GRB.MAXIMIZE)
+
+        else: # otherwise, just remove the z-constraints
+            x_vars = [model.getVarByName(x_namer(i)) for i in coords]
+            z_var = model.getVarByName('z')
+            for i in coords:
+                model.remove(model.getConstrByName(z_constr_namer(i)))
+        model.update()
+
+        # Now add new z constraints and optimize
+        for index, i in enumerate(coords):
+            sign_var = 1
+            if single_orthant[index] == '0':
+                sign_var = -1
+            model.addConstr(z_var <= sign_var * x_vars[index],
+                            name=z_constr_namer(i))
+        model.setObjective(z_var, gb.GRB.MAXIMIZE)            
+        model.update()
+        model.optimize()
+
+        # Process the optimization output:
+        if model.Status == 2:
+            output = (float(model.objVal), np.array([_.X for _ in x_vars]))
+        else:
+            output = False
+        return output, model 
+
+
+
     # =======================================================
     # =           Single ReLU Transformer Methods           =
     # =======================================================
@@ -311,7 +422,7 @@ class Zonotope(Domain):
         if self.lbs[i] >= 0:
             return (self.center[i], self.generator[i], None)
         if self.ubs[i] <= 0:
-            return (0, torch.zeros(self.generator.shape[1]), None)
+            return (0, torch.zeros(self.generator.shape[1]).double(), None)
 
     def zbox_single(self, i):
         if self.lbs[i] * self.ubs[i] >= 0:
@@ -332,6 +443,7 @@ class Zonotope(Domain):
         gen_row = self.generator[i]
         gen_col = torch.zeros(self.dimension)
         gen_col[i] = -self.lbs[i] / 2.0
+        return (center_coord, gen_row, gen_col)
 
 
     def zswitch_single(self, i):
@@ -373,13 +485,13 @@ class Zonotope(Domain):
     def deepz_single(self, i):
         if self.lbs[i] * self.ubs[i] >= 0:
             return self._z_known(i)
-
         lambda_ = self.ubs[i] / (self.ubs[i] - self.lbs[i])
         mu_ = -1 * self.ubs[i] * self.lbs[i] / (self.ubs[i] - self.lbs[i])
-        new_center = self.center[i] * lambda_ + mu_
+        new_center = lambda_ * self.ubs[i] / 2.0
+        # new_center = self.center[i] * lambda_ + mu_ 
         new_row = self.generator[i] * lambda_
-        new_col = torch.zeros(self.dimension)
-        new_col[i] = lambda_ * self.center[i] + mu_ +1e-6
+        new_col = torch.zeros(self.dimension).double()
+        new_col[i] = mu_/2.0 +1e-6
         return (new_center, new_row, new_col)
 
     # ======  End of Single ReLU Transformer Methods  =======
