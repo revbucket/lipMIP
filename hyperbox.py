@@ -85,12 +85,14 @@ class Hyperbox(Domain):
         center = (twocol[:, 0] + twocol[:, 1]) / 2.0
         radius =  torch.max(abs(center - twocol[:, 0]), 
                             abs(center - twocol[:, 1]))
-        return Hyperbox.from_dict({'dimension': dimension, 
-                                   'center': center, 
-                                   'radius': radius, 
-                                   'box_low': twocol[:, 0], 
-                                   'box_hi':  twocol[:, 1],
-                                   'is_vector': False})
+        hbox_out = Hyperbox.from_dict({'dimension': dimension, 
+                                       'center': center, 
+                                       'radius': radius, 
+                                       'box_low': twocol[:, 0], 
+                                       'box_hi':  twocol[:, 1],
+                                       'is_vector': False})
+        hbox_out._fixup()
+        return hbox_out
 
 
     @classmethod 
@@ -164,7 +166,10 @@ class Hyperbox(Domain):
     def set_2dshape(self, shape):
         self.shape = shape
 
+    def as_hyperbox(self):
+        return self 
 
+        
     def random_point(self, num_points=1, tensor_or_np='tensor', 
                      requires_grad=False):
         """ Returns a uniformly random point in this hyperbox
@@ -192,6 +197,45 @@ class Hyperbox(Domain):
             return twocol
         else:
             return twocol.numpy()
+
+
+    def map_layer_forward(self, network, i, abstract_params=None):
+        layer = network.net[i]
+        if isinstance(layer, nn.Linear):
+            return self.map_linear(layer, forward=True)
+        elif isinstance(layer, nn.Conv2d):
+            return self.map_conv2d(network, i, forward=True)
+        elif isinstance(layer, nn.ReLU):
+            return self.map_relu()
+        elif isinstance(layer, nn.LeakyReLU):
+            return self.map_leaky_relu(layer)
+        else:
+            raise NotImplementedError("unknown layer type", layer)
+
+
+    def map_layer_backward(self, network, i, grad_bound, abstract_params):
+        layer = network.net[-(i + 1)]
+        forward_idx = len(network.net) - i
+        if isinstance(layer, nn.Linear):
+            return self.map_linear(layer, forward=False)
+        elif isinstance(layer, nn.Conv2d):
+            return self.map_conv2d(network, forward_idx, forward=False)
+        elif isinstance(layer, nn.ReLU):
+            return self.map_switch(grad_bound)
+        elif isinstance(layer, nn.LeakyReLU):
+            return self.map_leaky_switch(layer, grad_bound)
+        else:
+            raise NotImplementedError("unknown layer type", layer)
+
+
+    def map_genlin(self, linear_layer, network, layer_num, forward=True):
+        if isinstance(linear_layer, nn.Linear):
+            return self.map_linear(linear_layer, forward=forward)
+        elif isinstance(linear_layer, nn.Conv2d):
+            return self.map_conv2d(network, layer_num, forward=forward)
+        else:
+            raise NotImplementedError("Unknown linear layer", linear_layer)
+
 
     def map_linear(self, linear, forward=True):
         """ Takes in a torch.Linear operator and maps this object through 
@@ -248,6 +292,12 @@ class Hyperbox(Domain):
                                             shape=output_shape)
         return hbox_out
 
+    def map_nonlin(self, nonlin):
+        if nonlin == F.relu: 
+            return self.map_relu()
+        else: 
+            return None # 
+
     def map_relu(self, **pf_kwargs):
         """ Returns the hyperbox attained by mapping this hyperbox through 
             elementwise ReLU operators
@@ -255,11 +305,32 @@ class Hyperbox(Domain):
         twocol = self.as_twocol(tensor_or_np='tensor')
         new_bounds = torch.max(twocol, torch.zeros_like(twocol))
         box_out = Hyperbox.from_twocol(new_bounds)
+        box_out._fixup()
         box_out.shape = self.shape
         return box_out # ._dilate()
 
+    def map_leaky_relu(self, layer, **pf_kwargs):
+        twocol = self.as_twocol(tensor_or_np='tensor')
+        box_out = Hyperbox.from_twocol(layer(twocol))
+        box_out._fixup()
+        box_out.shape = self.shape
+        return box_out
+
+    def map_nonlin_backwards(self, nonlin_obj, grad_bound):
+        if nonlin_obj == F.relu:
+            if isinstance(grad_bound, BooleanHyperbox):
+                return self.map_switch(grad_bound)
+        elif nonlin_obj == None:
+            return self
+        else:
+            raise NotImplementedError("ONLY RELU SUPPORTED")
+
     def map_switch(self, bool_box):
         return bool_box.map_switch(self)#._dilate()
+
+    def map_leaky_switch(self, layer, bool_box):
+        return bool_box.map_switch(self, layer.negative_slope)
+
 
     def encode_as_gurobi_model(self, squire, key):
         model = squire.model 
@@ -286,7 +357,7 @@ class Hyperbox(Domain):
             return truths.item()
         return truths
 
-    def as_boolean_hbox(self):
+    def as_boolean_hbox(self, params=None):
         return BooleanHyperbox.from_hyperbox(self)
 
     def _dilate(self, eps=1e-6):
@@ -294,6 +365,18 @@ class Hyperbox(Domain):
         self.radius += eps 
         self._fixup
         return self
+
+    @classmethod
+    def cast(cls, obj):
+        """ Casts hyperboxes, zonotopes, vectors as a hyperbox
+            (smallest bounding hyperbox in the case of zonos) """
+
+        if isinstance(obj, cls):
+            return obj 
+        elif isinstance(obj, (torch.Tensor, np.ndarray)):
+            return cls.from_vector(obj)
+        else:
+            return obj.as_hyperbox()
 
 
     # ==========================================================================
@@ -310,6 +393,11 @@ class Hyperbox(Domain):
 
         if isinstance(self.radius, numbers.Number):
             self.radius = torch.ones_like(self.center) * self.radius
+
+        self.box_low = self.box_low.data
+        self.box_hi = self.box_hi.data
+        self.center = self.center.data
+        self.radius = self.radius.data
 
 
     def _add_box_bound(self, val, lo_or_hi='lo'):
@@ -347,6 +435,9 @@ class BooleanHyperbox:
     """ Way to represent a vector of {-1, ?, 1} as a boolean 
         hyperbox. e.g., [-1, ?] = {(-1, -1), (-1, +1)}
     """
+    @classmethod
+    def relu_grad(cls, obj, params):
+        return obj.as_boolean_hbox(params)
 
     @classmethod
     def from_hyperbox(cls, hbox):
@@ -380,19 +471,21 @@ class BooleanHyperbox:
         for value in self.values:
             yield value
 
-    def map_switch(self, hyperbox):
+    def map_switch(self, hyperbox, leaky_value=0.0):
         """ Maps a hyperbox through elementwise switch operators
             where the switch values are self.values. 
         In 1-d switch works like this: given interval I and booleanbox a
-        SWITCH(I, a): = (0,0)                        if (a == -1)
+        SWITCH(I, a): = (0.,0.)                        if (a == -1)
                         I                            if (a == +1)
-                        (min(I[0], 0), max(I[1], 0)) if (a == 0)
+                        (min(I[0], 0.), max(I[1], 0.)) if (a == 0)
+        [CAVEAT: if leaky_value != 0, replace 0.^ with leaky_value]
         ARGS:
             hyperbox: hyperbox governing inputs to switch layer 
+            leaky_value : negative slope for a leaky ReLU
         RETURNS: 
             hyperbox with element-wise switch's applied
         """
-        eps = 1e-8
+        eps = 1e-7
         switch_off = self.values < 0
         switch_on = self.values > 0
         switch_q = self.values == 0
@@ -402,17 +495,35 @@ class BooleanHyperbox:
         new_highs = torch.clone(hyperbox.box_hi)
 
         # Handle the off case
-        new_lows[switch_off] = -eps
-        new_highs[switch_off] = +eps
+        new_lows[switch_off] *= leaky_value
+        new_highs[switch_off] *= leaky_value
 
         # Handle the uncertain case
-        new_lows[switch_q & (hyperbox.box_low > 0)] = -eps
-        new_highs[switch_q & (hyperbox.box_hi < 0)] = +eps
+        new_lows[switch_q & (hyperbox.box_low > 0)] *= leaky_value
+        new_highs[switch_q & (hyperbox.box_hi < 0)] *= leaky_value
 
 
+        # Dilate just a little bit for safety 
+        new_lows -= eps
+        new_highs += eps 
+        # And combine to make a new hyperbox
         box_out = Hyperbox.from_twocol(torch.stack([new_lows, new_highs]).T)
         box_out.shape = hyperbox.shape
         return box_out
+
+    def map_leaky_switch(self, hyperbox, leaky_relu):
+        """ Maps a hyperbox through elementwise leaky-switch operators
+        In 1-d, leaky switch works like this: given interval I and boolbox a,
+        (let r be the slope of the negative part)
+        LEAKYSWITCH(I, a) := (r, r)                             if (a == -1)
+                             I                                  if (a == +1)
+                             (min(I[0], r), max(I[1], r))       if (a == 0)
+        ARGS:
+            hyperbox: hyperbox governing inputs to leaky-switch layer 
+        RETURNS:
+            hyperbox with element-wise switch's applied
+        """
+        eps = 1e-8
 
 
     def zero_val(self):

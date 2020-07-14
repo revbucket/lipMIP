@@ -3,6 +3,7 @@
 import numpy 
 import torch 
 import torch.nn as nn 
+import torch.nn.functional as F
 import copy 
 import numpy as np 
 import numbers 
@@ -52,6 +53,24 @@ class Zonotope(Domain):
                    ubs=hyperbox.box_hi, 
                    shape=hyperbox.shape)
 
+    @classmethod
+    def from_vector(cls, vec):
+        """ Takes in a vector and makes a hyperbox """
+        return cls.from_hyperbox(Hyperbox.from_vector(vec))
+
+    @classmethod
+    def cast(cls, obj):
+        """ Casts hyperboxes, zonopes, vectors as a zonotope """
+        if isinstance(obj, Hyperbox):
+            return cls.from_hyperbox(obj)
+        elif isinstance(obj, (torch.Tensor, np.ndarray)):
+            return cls.from_vector(obj)
+        elif isinstance(obj, cls):
+            return obj
+        else:
+            return obj.as_zonotope()            
+
+
     def set_2dshape(self, shape):
         self.shape = shape
 
@@ -63,6 +82,44 @@ class Zonotope(Domain):
             tensor of center + E @ y_tensor
         """
         return self.center + (self.generator @ y_tensor.unsqueeze(-1)).squeeze(-1)
+
+
+    def map_layer_forward(self, network, i, abstract_params=None):
+        layer = network.net[i]
+        if isinstance(layer, nn.Linear):
+            return self.map_linear(layer, forward=True)
+        elif isinstance(layer, nn.Conv2d):
+            return self.map_conv2d(network, i, forward=True)
+        elif isinstance(layer, nn.ReLU):
+            return self.map_relu(**(abstract_params or {}))
+        elif isinstance(layer, nn.LeakyReLU):
+            return self.map_leaky_relu(layer, **(abstract_params or {}))
+        else:
+            raise NotImplementedError("unknown layer type", layer)
+
+    def map_layer_backward(self, network, i, grad_bound, abstract_params=None):
+        layer = network.net[-(i + 1)]
+        forward_idx = len(network.net) - 1
+        if isinstance(layer, nn.Linear):
+            return self.map_linear(layer, forward=False)
+        elif isinstance(layer, nn.Conv2d):
+            return self.map_conv2d(network, forward_idx, forward=False)
+        elif isinstance(layer, nn.ReLU):
+            return self.map_switch(grad_bound, **(abstract_params or {}))
+        elif isinstance(layer, nn.LeakyReLU):
+            return self.map_leaky_switch(layer, grad_bound, 
+                                         **(abstract_params or {}))
+        else:
+            return NotImplementedError("Unknown layer type", layer)
+
+
+    def map_genlin(self, linear_layer, network, layer_num, forward=True):
+        if isinstance(linear_layer, nn.Linear):
+            return self.map_linear(linear_layer, forward=forward)
+        elif isinstance(linear_layer, nn.Conv2d):
+            return self.map_conv2d(network, layer_num, forward=forward)
+        else:
+            raise NotImplementedError("Unknown linear layer", linear_layer)
 
 
     def map_linear(self, linear, forward=True):
@@ -130,6 +187,12 @@ class Zonotope(Domain):
         new_zono._set_lbs_ubs()
         return new_zono
 
+    def map_nonlin(self, nonlin):
+        if nonlin == F.relu: 
+            return self.map_relu()
+        else: 
+            return None # 
+
 
     def map_relu(self, transformer='deep', add_new_cols=True):
 
@@ -141,6 +204,26 @@ class Zonotope(Domain):
         single_outputs = [single_method(i) for i in range(self.dimension)]
         return self._apply_single_outputs(single_outputs, 
                                           add_new_cols=add_new_cols)
+
+    def map_leaky_relu(self, layer, transformer='deep', add_new_cols=True):
+        single_method = {'box': self.zbox_single_leaky,
+                         'diag': self.zdiag_single_leaky,
+                         'switch': self.zswitch_single_leaky,
+                         'deep': self.deepz_single_leaky}[transformer]
+        single_outputs = [single_method(i, layer) for i in 
+                          range(self.dimension)]
+        return self._apply_single_outputs(single_outputs, 
+                                          add_new_cols=add_new_cols)
+
+
+    def map_nonlin_backwards(self, nonlin_obj, grad_bound):
+        if nonlin_obj == F.relu:
+            if isinstance(grad_bound, BooleanHyperbox):
+                return self.map_switch(grad_bound)
+        elif nonlin_obj == None:
+            return self
+        else:
+            raise NotImplementedError("ONLY RELU SUPPORTED")
 
 
     def map_switch(self, bool_box, transformer='deep', add_new_cols=True):
@@ -156,10 +239,21 @@ class Zonotope(Domain):
                                           add_new_cols=add_new_cols)
 
 
+    def map_leaky_switch(self, layer, bool_box, transformer='deep', 
+                         add_new_cols=True):
+        """ Returns a new zonotope corresponding to a leaky switch function 
+            applied to all elements in self, with the given boolean-hyperbox 
+        """
+
+        single_outputs = [self.deepS_single_leaky(i, layer, bool_box) 
+                          for i in range(self.dimension)]
+        return self._apply_single_outputs(single_outputs, 
+                                          add_new_cols=add_new_cols)
+
+
     def _apply_single_outputs(self, single_outputs, add_new_cols=True):
-        new_center = torch.tensor([_[0] for _ in single_outputs], 
-                                  dtype=torch.float64)
-        new_generator = torch.stack([_[1] for _ in single_outputs]).double()
+        new_center = torch.tensor([_[0] for _ in single_outputs])
+        new_generator = torch.stack([_[1] for _ in single_outputs])
         new_cols = [_[2] for _ in single_outputs if _[2] is not None]
         if len(new_cols) > 0 and add_new_cols:
             new_generator = torch.cat([new_generator, 
@@ -218,7 +312,7 @@ class Zonotope(Domain):
         final_zono._set_lbs_ubs()
         return final_zono
 
-    def as_boolean_hbox(self):
+    def as_boolean_hbox(self, params=None):
         return BooleanHyperbox.from_zonotope(self)
 
     def contains(self, point, indices=None):
@@ -409,6 +503,12 @@ class Zonotope(Domain):
         return output, model 
 
 
+    def encode_as_gurobi_model(self, squire, key):
+        model = squire.model 
+        namer = utils.build_var_namer(key)
+        gb_vars = []
+        raise NotImplementedError("Build this later!")
+    
 
     # =======================================================
     # =           Single ReLU Transformer Methods           =
@@ -422,7 +522,7 @@ class Zonotope(Domain):
         if self.lbs[i] >= 0:
             return (self.center[i], self.generator[i], None)
         if self.ubs[i] <= 0:
-            return (0, torch.zeros(self.generator.shape[1]).double(), None)
+            return (0, torch.zeros(self.generator.shape[1]), None)
 
     def zbox_single(self, i):
         if self.lbs[i] * self.ubs[i] >= 0:
@@ -490,12 +590,80 @@ class Zonotope(Domain):
         new_center = lambda_ * self.ubs[i] / 2.0
         # new_center = self.center[i] * lambda_ + mu_ 
         new_row = self.generator[i] * lambda_
-        new_col = torch.zeros(self.dimension).double()
+        new_col = torch.zeros(self.dimension)
         new_col[i] = mu_/2.0 +1e-6
         return (new_center, new_row, new_col)
 
     # ======  End of Single ReLU Transformer Methods  =======
 
+    # =======================================================
+    # =           Single LEAKY ReLU Transformer Methods     =
+    # =======================================================
+    # Each function here returns a (center_coord, gen_row, gen_col)
+    # - center_coord is just a float for the i^th coord of new center
+    # - gen_row is a new generator row (none if unchanged)
+    # - gen_col is a new generator col (none if not needed)
+    # All of these take args (i, layer)
+    # where i is the coordinate index and layer is the LeakyReLU instance 
+    def _z_known_leaky(self, i, layer):
+        if self.lbs[i] >= 0:
+            return (self.center[i], self.generator[i], None)
+        if self.ubs[i] <= 0:
+            neg = layer.negative_slope
+            return (self.center[i] * neg, self.generator[i] * neg, None)
+
+    def zbox_single_leaky(self, i, layer):
+        if self.lbs[i] * self.ubs[i] >= 0:
+            return self._z_known_leaky(i, layer)
+        neg = layer.negative_slope
+        full_range = self.ubs[i] + neg * self.lbs[i]
+        center_coord = full_range / 2.0 
+        gen_row = torch.zeros(self.generator.shape[1])
+        gen_col = torch.zeros(self.dimension)
+        gen_col[i] = full_range / 2.0 
+
+        retun (center_coord, gen_row, gen_col)
+
+    def zdiag_single_leaky(self, i, layer):
+        if self.lbs[i] * self.ubs[i] >= 0:
+            return self._z_known_leaky(i, layer)
+
+        neg = layer.negative_slope 
+        assert neg < 1.0 # Assumption: leaky relus need slope < 1
+        center_coord = self.center[i] + (neg - 1) * self.lbs[i] / 2.0
+        gen_row = self.generator[i] 
+        gen_col = torch.zeros(self.dimension)
+        gen_col[i] = (neg - 1) * self.lbs[i] / 2.0
+        return (center_coord, gen_row, gen_col)
+
+    def zswitch_single_leaky(self, i, layer):
+        if abs(self.lbs[i]) > abs(self.ubs[i]):
+            return self.zbox_single_leaky(i, layer)
+        else:
+            return self.zdiag_single_leaky(i, layer)
+
+    def deepz_single_leaky(self, i, layer):
+        if self.lbs[i] * self.ubs[i] >= 0:
+            return self._z_known_leaky(i, layer)
+
+        neg = layer.negative_slope
+        assert neg < 1.0
+        # Need to establish:
+        # 1) slope 
+        # 2) y_max (new y range)
+        # 3) new center 
+        u, l = self.ubs[i], self.lbs[i]
+        lambda_ = (u - neg * l) / (u - l)
+        ymax = (1 - neg) * (-u * l) / (u - l)
+
+        center_coord = (u * u - neg * l * l) / (2 * (u - l))
+        gen_row = self.generator[i] * lambda_
+        gen_col = torch.zeros(self.dimension)
+        gen_col[i] = ymax / 2.0 
+
+        return (center_coord, gen_row, gen_col)
+
+    # ======  End of Single LEAKY ReLU Transformer Methods  =======
 
     # ===========================================
     # =           Single SWITCH ReLU            =
@@ -504,12 +672,12 @@ class Zonotope(Domain):
     # - center_coord is just a float for the i^th coord of new center
     # - gen_row is a new generator row (none if unchanged)
     # - gen_col is a new generator col (none if not needed)
-    def _s_known(self, i, bool_box):
+    def _s_known(self, i, bool_box, leaky=None):
         if bool_box[i] == 1:
             return (self.center[i], self.generator[i], None)
 
         if bool_box[i] == -1:
-            return (0, torch.zeros(self.generator.shape[1]), None)
+            return (0.0, torch.zeros(self.generator.shape[1]), None)
 
 
     def sBox_single(self, i, bool_box):
@@ -573,9 +741,74 @@ class Zonotope(Domain):
 
         return (center_coord, gen_row, gen_col)
 
+    # =======================================================
+    # =           Single LEAKY SWITCH Transformer Methods     =
+    # =======================================================
+    # Each function here returns a (center_coord, gen_row, gen_col)
+    # - center_coord is just a float for the i^th coord of new center
+    # - gen_row is a new generator row (none if unchanged)
+    # - gen_col is a new generator col (none if not needed)
+    # All of these take args (i, layer, bool_box)
+    # where i is the coordinate index and layer is the LeakyReLU instance 
+
+    def _s_known_leaky(self, i, layer, bool_box):
+        mult = 1.0 
+        if bool_box[i] == -1:
+            mult = layer.negative_slope
+
+        return (mult * self.center[i], mult * self.generator[i], None)
 
 
+    def deepS_single_leaky(self, i, layer, bool_box):
+        # If this LeakyReLU is always OFF of ON -- everything becomes constant
+        if bool_box[i] != 0:
+            return self._s_known_leaky(i, layer, bool_box)
+
+        neg = layer.negative_slope
+        assert neg < 1
+        l = self.lbs[i]
+        u = self.ubs[i]
+        med = (l + u) / 2.0
+        ymax = (1 - neg) * max([abs(l), abs(u)])
+        gen_col = torch.zeros(self.dimension)
+        gen_col[i] = ymax / 2.0
 
 
+        # essentially four cases 
+        # Case 1: both l, u >=0 
+        #         + slope is neg
+        #         + center passes through (u, (1+neg) * u / 2)
+
+        # Case 2: both l, u <= 0
+        #         + slope is neg 
+        #         + center passes through (l, (1+neg) * l / 2)
+
+        if l * u >= 0: # cases 1 and 2 here
+            lambda_ = neg
+            gen_row = self.generator[i] * lambda_
+            if u > 0:
+                center_coord = (1 + neg) * u / 2 + lambda_ * (l - u) / 2.0
+            else:
+                center_coord = (1 + neg) * l / 2 + lambda_ * (u - l) / 2.0                
+
+        # Cases 3 and 4: l < 0 < u
+        # Case 3 occurs when u > |l|
+        #        + max-vert is (1-neg) * u
+        #        + slope is min([u-neg*l, neg*u-l])/(u-l)
+        #        + center passes through (u, (1+neg) * u / 2)
+
+        #Case 4: u < |l|
+        #        + max-vert is (1-neg) * |l|
+        #        + slope is min([u-neg*l, neg*u-l]) / (u-l)
+        #        + center passes through (l, (1+neg) * l / 2)
+        else:
+            lambda_ = min([u - neg * l, neg * u - l]) / (u - l)
+            gen_row = lambda_ * self.generator[i]
+            if u > abs(l):
+                cx, cy = (u, (1 + neg) * u / 2.0)
+            else:
+                cx, cy = (l, (1 + neg) * l / 2.0)
+            center_coord = cy + lambda_ * (med - cx)
 
 
+        return (center_coord, gen_row, gen_col)

@@ -323,11 +323,11 @@ def display_images(image_rows, figsize=(8, 8)):
 # =           Pytorch helpers                          =
 # ======================================================
 
-def tensorfy(x):
+def tensorfy(x, dtype=torch.float32):
 	if isinstance(x, torch.Tensor):
 		return x
 	else:
-		return torch.from_numpy(x)
+		return torch.from_numpy(x).type(dtype)
 
 
 def one_hot(labels, num_classes):

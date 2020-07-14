@@ -20,6 +20,7 @@ class ReLUNet(nn.Module):
         self.dtype = dtype
         self.fcs = []
         self.num_relus = len(layer_sizes) - 2
+        self.num_layers = len(layer_sizes) - 1 
         self.bias = bias
         if manual_net is None:
             self.net = self.build_network(layer_sizes)
@@ -185,12 +186,18 @@ class ReLUNet(nn.Module):
     def get_ith_hidden_unit(self, i):
         """ Returns the i^th hidden unit, which, is a pair of 
             (nn.Linear, nn.ReLU) objects, starting at index 0. 
+
+        BEHAVIOR: 
+            If my relunet looks like (LR)* L_fin
+            Then I want self.this(self.num_layers) -> (L_fin, None)
+                        self.this(-1) -> (L_fin, None)
+                        self.this(i) -> (L_i, f.relu)
         """
-        if i == -1:
-            return self.net[-1], nn.ReLU
-        seq_start = 2 * i
-        seq_out = self.net[seq_start: seq_start + 2]
-        return (seq_out[0], seq_out[1])
+
+        if i in [self.num_layers -1, -1]:
+            return self.fcs[-1], None
+        else:
+            return self.fcs[i], F.relu
 
     def get_sign_configs(self, x):
         preacts = [utils.as_numpy(_.squeeze()) for _ in 
@@ -295,6 +302,8 @@ class ReLUNet(nn.Module):
             output_vars.append(var)
         return output_vars
 
+    def get_layer_num_from_rev(self, rev_layer_num):
+        return self.num_layers - rev_layer_num
 
 
 class SubReLUNet(ReLUNet):
@@ -481,7 +490,11 @@ class ConvNet(ReLUNet):
         """ Returns the i^th hidden unit, which, is a pair of 
             (nn.Linear/nn.Conv2d, nn.ReLU) objects, starting at index 0. 
         """
-        hidden_unit = self.net[i] 
-        return (hidden_unit, nn.ReLU)
+        linear = self.net[i]         
+        if 0 <= i < self.num_layers:            
+            nonlin = F.relu 
+        else:
+            nonlin = None
+        return (linear, nonlin)
 
 
