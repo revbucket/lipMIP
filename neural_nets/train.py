@@ -335,8 +335,12 @@ class LpWeightReg(Regularizer):
 
 	def forward(self, examples, labels, outputs=None):
 		""" Just return the l1 norm of the weight matrices """
-		l1_weight = lambda fc: fc.weight.norm(self.p_norm)
-		return self.scalar * sum(l1_weight(fc) for fc in self.network.fcs)
+		weight_norm = lambda fc: fc.weight.norm(self.p_norm)
+		sum_val = 0
+		for layer in self.network.net:
+			if hasattr(layer, 'weight'):
+				sum_val += weight_norm(layer)
+		return self.scalar * sum_val
 
 
 

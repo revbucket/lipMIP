@@ -189,7 +189,7 @@ class Hyperbox(Domain):
         if tensor_or_np == 'tensor':
             return rand_points.requires_grad_(requires_grad)
         else:
-            return utils.as_numpy()
+            return utils.as_numpy(rand_points)
 
     def as_twocol(self, tensor_or_np='tensor'):
         twocol = torch.stack([self.box_low, self.box_hi]).T 

@@ -37,6 +37,9 @@ class GenNet(nn.Module):
         self._support_check()
         self._setup()
 
+    def __getitem__(self, idx):
+        return self.net[idx]
+
     def _setup(self):
         """ Sets up some attributes we want to know computed off the 
             sequential unit 

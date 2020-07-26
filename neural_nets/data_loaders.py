@@ -9,6 +9,8 @@ import math
 import random
 import matplotlib.pyplot as plt
 import utilities as utils
+import csv
+
 # ===============================================================================
 # =           MNIST DATA                                                        =
 # ===============================================================================
@@ -68,6 +70,157 @@ class SubMNIST(datasets.MNIST):
     def processed_folder(self):
         return os.path.join(self.root, 'MNIST', 'processed')
 
+
+
+# ===============================================================================
+# =           IRIS DATA                                                         =
+# ===============================================================================
+
+class IRIS:
+    """ Data copied from https://github.com/yangzhangalmo/pytorch-iris/
+    Methods in this are:
+    1) split_train_val - splits dataset into training/validation sets 
+    2) display_2d - picks some random orthogonal directions and plots data 
+                    in the projection to the 2D affine subspace
+    """
+    DATAFILE = os.path.join(os.path.dirname(__file__), 'iris.csv')
+    MAPDICT = {'Iris-setosa': 0,
+               'Iris-versicolor': 1, 
+               'Iris-virginica': 2}
+    def __init__(self):
+        X, Y = [], []
+
+        with open(self.DATAFILE, newline='\n') as csvfile:
+            for i, el in enumerate(csv.reader(csvfile, delimiter=',')):
+                if i == 0:
+                    continue # Skip header 
+                else:
+                    X.append([float(_) for _ in el[:-1]])
+                    Y.append(self.MAPDICT[el[-1]])
+
+        self.X, self.Y = torch.tensor(X), torch.tensor(Y).long()
+        self.train_set = None
+        self.test_set = None
+
+    def split_train_val(self, train_prop, shuffle_seed=None):
+        """ First shuffles the dataset and then returns a split
+            of train/val of size train_prop/(1-train_prop)
+        """
+        if self.train_set is not None:
+            return self.train_set, self.test_set
+        if shuffle_seed is not None:
+            torch.manual_seed(shuffle_seed)
+        randperm = torch.randperm(self.Y.numel())
+        torch.manual_seed(random.randint(1, 2 ** 20)) # reset the random seed
+        shuffle_X = self.X[randperm]
+        shuffle_Y = self.Y[randperm]
+
+
+        cutoff_idx = int(self.X.shape[0] * train_prop)
+        self.train_set = [(shuffle_X[:cutoff_idx], shuffle_Y[:cutoff_idx])]
+        self.test_set = [(shuffle_X[cutoff_idx:], shuffle_Y[cutoff_idx:])]
+
+        return self.train_set, self.test_set
+
+    def display_2d(self, rand_dirs=None, ax=None):
+        """ Centers the data and plots the projection onto a random 
+            (or pre-specified) 2D affine subspace passing through data 
+            mean .
+            RETURNS: (rand_dirs, axes obj) 
+        """
+        # Center the data 
+        center = self.X.sum(0) / self.X.shape[0]
+        center_X = self.X - center 
+
+        # Compute the random subspace
+        if rand_dirs is not None:
+            rd_1, rd_2 = rand_dirs 
+        else:
+            rd_1 = torch.randn(self.X.shape[1])
+            rd_1 /= torch.norm(rd_1)
+            rd_2 = torch.randn(self.X.shape[1])
+            rd_2 -= (rd_2 @ rd_1) * rd_1 
+            rd_2 /= torch.norm(rd_2)
+        rand_mat = torch.stack([rd_1, rd_2]).T 
+        x_coords = center_X @ rand_mat 
+
+        # Build axes object 
+        if ax is None:
+            fig, ax = plt.subplots(figsize=(8,8))
+
+        # Split by class 
+        for cls_idx, c in enumerate('rgb'):
+            class_x = x_coords[self.Y == cls_idx]
+            ax.scatter(class_x[:,0], class_x[:,1], c=c)
+
+        return ((rd_1, rd_2), ax)
+# ===============================================================================
+# =           CIRCLE DATA                                                       =
+# ===============================================================================
+class CircleSet:
+    # Toy Dataset from https://arxiv.org/pdf/1907.05681.pdf
+    def __init__(self, N, _type=2001, random_seed=None):
+        """ Creates a circle dataset according to the paper from _type:
+            _type == 2001: https://arxiv.org/pdf/2001.06263.pdf 
+            _type == 1907: https://arxiv.org/pdf/1907.05681.pdf
+            Domain: [-4, +4]^2
+            X ~ U(Domain)
+            Y = 0 if (1 <= x.norm() <= 2), 1 otherwise 
+        """
+        if random_seed is not None:
+            torch.manual_seed(random_seed)
+        assert _type in [1907, 2001]
+
+        self._type = _type
+        if self._type == 1907:
+            self.X = torch.rand(N, 2) * 8 - 4 
+            self.Y = ((torch.norm(self.X, dim=1) - 1.5).abs() <= 0.5).long() 
+            self.xmin = self.ymin = -4 
+            self.xmax = self.ymax = 4
+        else:
+            self.X = torch.rand(N, 2) * 2 - 1 
+            self.Y = ((torch.norm(self.X, dim=1)) <= 2 / math.pi).long()
+            self.xmin = self.ymin = -1 
+            self.xmax = self.ymax = 1
+
+        self.train_set = None
+        self.test_set = None
+        torch.manual_seed(random.randint(1, 2 **20)) # reset random seed
+
+    def split_train_val(self, train_prop, shuffle_seed=None):
+        """ First shuffles the dataset and then returns a split
+            of train/val of size train_prop/(1-train_prop)
+        """
+        if self.train_set is not None:
+            return self.train_set, self.test_set
+
+        if shuffle_seed is not None:
+            torch.manual_seed(shuffle_seed)
+        randperm = torch.randperm(self.Y.numel())
+        torch.manual_seed(random.randint(1, 2 ** 20)) # reset the random seed
+        shuffle_X = self.X[randperm]
+        shuffle_Y = self.Y[randperm]
+
+
+        cutoff_idx = int(self.X.shape[0] * train_prop)
+        train_set = [(shuffle_X[:cutoff_idx], shuffle_Y[:cutoff_idx])]
+        test_set = [(shuffle_X[cutoff_idx:], shuffle_Y[cutoff_idx:])]
+
+        self.train_set = train_set
+        self.test_set = test_set
+        return train_set, test_set
+
+    def display_2d(self, ax=None):
+        if ax is None:
+            fig, ax = plt.subplots(figsize=(8,8))
+        ax.set_xlim(self.xmin, self.xmax)
+        ax.set_ylim(self.ymin, self.ymax)
+
+        for class_idx, c in enumerate('rb'):
+            class_x = self.X[self.Y == class_idx]
+
+            ax.scatter(class_x[:,0], class_x[:,1], c=c)
+        return ax 
 
 
 # ===============================================================================

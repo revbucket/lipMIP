@@ -74,6 +74,20 @@ class Zonotope(Domain):
     def set_2dshape(self, shape):
         self.shape = shape
 
+    def random_point(self, num_points=1, tensor_or_np='tensor', 
+                     requires_grad=False):
+        assert tensor_or_np in ['np', 'tensor']
+        shape = (num_points, self.generator.shape[1])
+        rand = torch.rand((num_points, self.generator.shape[1])) *2 - 1
+        rand.type(self.center.dtype)
+
+        points = self.y(rand)
+
+        if tensor_or_np == 'tensor':
+            return points.data.requires_grad_(requires_grad)
+        else:
+            return utils.as_numpy(rand_points)
+
     def y(self, y_tensor): 
         """ Returns a tensor of points in R^n given their generating ys 
         ARGS: 
@@ -315,7 +329,15 @@ class Zonotope(Domain):
     def as_boolean_hbox(self, params=None):
         return BooleanHyperbox.from_zonotope(self)
 
-    def contains(self, point, indices=None):
+    def contains(self, points):
+        """ runs .contains_point(...) for every point in points """
+        if points.dim() == 1:
+            return [self.contains_point(points)]
+        else:
+            return [self.contains_point(_) for _ in points]
+
+
+    def contains_point(self, point, indices=None):
         """ Takes in a numpy array of length self.dimension and returns True/False
             depending if point is contained in the zonotope.
             We naively just solve this with a linear program 
@@ -325,6 +347,7 @@ class Zonotope(Domain):
         RETURNS:
             boolean
         """
+        eps = 1e-6
         if indices is None:
             indices = range(self.dimension)
         with utils.silent():
@@ -334,8 +357,10 @@ class Zonotope(Domain):
         gb_vars = [model.addVar(lb=-1.0, ub=1.0) 
                    for i in range(self.generator.shape[1])]
         for i, idx in enumerate(indices):
-            model.addConstr(point[i].item() - self.center[idx].item() == 
-                            gb.LinExpr(self.generator[idx], gb_vars))
+            model.addConstr(point[i].item() - self.center[idx].item() >= 
+                            gb.LinExpr(self.generator[idx], gb_vars) - eps)
+            model.addConstr(point[i].item() - self.center[idx].item() <=
+                            gb.LinExpr(self.generator[idx], gb_vars) + eps)            
 
         model.update()
         model.optimize()
