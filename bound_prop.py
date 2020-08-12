@@ -274,3 +274,73 @@ class BoundPropBackward(object):
 
 
 
+
+
+class TestBoundProp:
+	def __init__(self, network, params, input_range, output_range):
+		""" Test suite for bound propagation testing """
+		self.network = network
+		forward, backward = AbstractNN2(network).get_both_bounds(params, 
+															     input_range, 
+															     output_range)
+		self.forward = forward 
+		self.backward = backward 
+
+	def check_forward_backward_all(self, num_points=1000):
+		""" Checks the forward/backward bounds being correct for 
+			every layer 
+		"""
+		forw_errs, back_errs = [], []
+		for i, _ in enumerate(self.network.net):
+			out = self.check_forward_backward_idx(i, num_points=num_points, 
+												  do_asserts=False)
+			if out[0] > 0:
+				forw_errs.append((i, out[0]))
+			if out[1] > 0:
+				back_errs.append((i, out[1]))
+
+
+		all_check = (len(forw_errs) + len(back_errs) == 0)
+		if all_check:
+			print("ALL INDICES PASSED CHECKS! ")
+		else:
+			if len(forw_errs) > 0:
+				print("FORWARD ERRORS:", forw_errs)
+			if len(back_errs) > 0:
+				print("BACKWARD ERRORS:", back_errs)
+
+
+	def check_forward_backward_idx(self, start_idx, num_points=1000, 
+								   do_asserts=True):
+		""" Checks the forward and backward bounds being correct 
+			based on random points
+		- Pick an index and only consider network[idx:]
+		- Pick a bunch of random points in the input to the idx'th layer 
+		- Pass each point through the suffix of the network and assert it 
+		  is in the right range 
+		- assert the gradient (of the output wrt the idx'th input) lies 
+		  in the idx'th backprop range 
+		"""
+
+		if start_idx == 0:
+			input_range = self.forward.input_range
+			output_range = self.backward.output_range 
+		else:
+			input_range = self.forward.layer_ranges[start_idx - 1]
+			output_range = self.backward.backward_bounds[-(start_idx + 1)]
+
+
+		rand_points = input_range.random_point(num_points, requires_grad=True)
+		forward_outs = self.network.partial_forward(rand_points, start_idx)
+		y = (forward_outs @ self.backward.input_range).sum() 
+		y.backward() 
+		backward_outs = rand_points.grad 
+
+		forw_errs = num_points - sum(self.forward.output_range.contains(forward_outs))
+		back_errs = num_points - sum(output_range.contains(backward_outs))
+
+		if do_asserts:
+			assert forw_errs == 0
+			assert back_errs == 0
+		return forw_errs, back_errs
+
