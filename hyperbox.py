@@ -379,6 +379,22 @@ class Hyperbox(Domain):
             return obj.as_hyperbox()
 
 
+    def maximize_norm(self, norm='l1'):
+        """ Maximizes the l1/linf norm of the hyperbox 
+        ARGS:
+            norm : str - either 'l1' or 'linf', decides which norm we maximize 
+        RETURNS:
+            float - maximum norm of the hyperbox 
+        """
+
+        assert norm in ['l1', 'linf']
+        abs_twocol = self.as_twocol().abs()
+        if norm == 'l1': 
+            return abs_twocol.max(1)[0].sum().item()
+        else:
+            return abs_twocol.max().item()
+
+
     # ==========================================================================
     # =           Helper methods                                               =
     # ==========================================================================

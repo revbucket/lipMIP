@@ -760,7 +760,7 @@ class GurobiSquire():
                 not_sign = (1 - sign_var)
                 model.addConstr(output_var >= input_var - tolerance)
                 model.addConstr(output_var >= -input_var - tolerance)
-                model.addConstr(output_var <= input_var - 2 * l * sign_var + tolerance)
+                model.addConstr(output_var <= input_var - 2 * l * sign_var + mmtolerance)
                 model.addConstr(output_var <= -input_var + 2 * u * not_sign + tolerance)
                 sign_vars[i] = sign_var
             output_vars.append(output_var)

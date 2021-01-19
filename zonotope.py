@@ -411,10 +411,10 @@ class Zonotope(Domain):
         t_vars = []
         for i, x_var in enumerate(x_vars):
             if self.ubs[i] <= 0:
-                t_vars.append(model.addVar(lb=0.0, ub=-self.lbs[i]))
-                model.addConstr(t_vars[i] == x_vars[i])
+                t_vars.append(model.addVar(lb=0.0, ub=abs(self.lbs[i]) + tolerance))
+                model.addConstr(t_vars[i] == -x_vars[i])
             elif self.lbs[i] >= 0:
-                t_vars.append(model.addVar(lb=0.0, ub=self.ubs[i]))
+                t_vars.append(model.addVar(lb=0.0, ub=abs(self.ubs[i]) + tolerance))
                 model.addConstr(t_vars[i] == x_vars[i])
             else:
                 t_vars.append(model.addVar(lb=0.0, 
@@ -423,14 +423,15 @@ class Zonotope(Domain):
                 t_var = t_vars[-1]
                 x_var = x_vars[i]
                 lb, ub = self.lbs[i], self.ubs[i]
-                model.addConstr(t_var >= x_var - tolerance)
-                model.addConstr(t_var >= -x_var - tolerance)
-                model.addConstr(t_var <= x_var - 2 *  lb * (1 - bin_var) + tolerance)
-                model.addConstr(t_var <= -x_var + 2 * ub * bin_var + tolerance)                
+                model.addConstr(t_var >= x_var)
+                model.addConstr(t_var >= -x_var)
+                model.addConstr(t_var <= x_var - 2 *  lb * (1 - bin_var))
+                model.addConstr(t_var <= -x_var + 2 * ub * bin_var)                
 
         model.setObjective(sum(t_vars), gb.GRB.MAXIMIZE)
         model.update()
-        return model        
+        return model     
+
 
     def maximize_linf_norm(self):
         """ Returns maximal l_inf norm of any point inside this zono 
