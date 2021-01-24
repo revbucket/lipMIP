@@ -54,7 +54,6 @@ class ReLUNet(nn.Module):
         """ Returns a deepcopy of this object """
         return self.from_sequential(copy.deepcopy(self.net))
 
-
     def tensorfy_clone(self, x, requires_grad=False):
         """ Clones whatever x is into a tensor with self's datatype """
         if isinstance(x, torch.Tensor):
@@ -63,6 +62,8 @@ class ReLUNet(nn.Module):
         else:
             return torch.tensor(x, dtype=self.dtype, 
                                 requires_grad=requires_grad)
+            
+
 
     def build_network(self, layer_sizes):
         layers = OrderedDict()

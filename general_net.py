@@ -21,7 +21,7 @@ class GenNet(nn.Module):
         Nonlinearities: ReLU, LeakyRELU
     """ 
     SUPPORTED_LINS = [nn.Linear, nn.Conv2d] # L
-    SUPPORTED_NONLINS = [nn.ReLU, nn.LeakyReLU] # R
+    SUPPORTED_NONLINS = [nn.ReLU, nn.LeakyReLU, nn.Sigmoid, nn.Tanh] # R
     SUPPORTED_POOLS = [nn.MaxPool2d, nn.AvgPool2d] # P
     def __init__(self, net, dtype=torch.float):
         """ Constructor for GenNets 
@@ -34,6 +34,7 @@ class GenNet(nn.Module):
         super(GenNet, self).__init__()
         self.net = net
         self.dtype = dtype 
+        self.shapes = None
         self._support_check()
         self._setup()
 
@@ -76,17 +77,40 @@ class GenNet(nn.Module):
         net = nn.Sequential(*seq_list)
         return cls(net, dtype=dtype)
 
+    def set_shapes(self, x):
+        # Given an input to the net will go through and set shapes
+        # self.shapes[i] refers to the input of the i^{th} layer!
+        # We'll always omit the first index 
+        shapes = []
+        for i, layer in enumerate(self.net):
+            if isinstance(layer, nn.Linear):
+                x = x.view(-1, layer.in_features)           
+            shapes.append(x.shape[1:])
+            x = layer(x) 
+        shapes.append(x.shape[1:])
+        self.shapes = shapes
+
     def partial_forward(self, x, start_idx):
         for layer in self.net[start_idx:]:
             x = layer(x)
         return x
 
     def forward(self, x):
-        if isinstance(self.net[0], nn.Linear):
-            x = x.view(-1, self.net[0].in_features)
         for layer in self.net:
+            if isinstance(layer, nn.Linear):
+                x = x.view(-1, layer.in_features)
             x = layer(x)
         return x
+
+
+    def tensorfy_clone(self, x, requires_grad=False):
+        """ Clones whatever x is into a tensor with self's datatype """
+        if isinstance(x, torch.Tensor):
+            return x.clone().detach()\
+                    .type(self.dtype).requires_grad_(requires_grad)
+        else:
+            return torch.tensor(x, dtype=self.dtype, 
+                                requires_grad=requires_grad)
 
 
     def display_decision_bounds(self, x_range, y_range, density, figsize=(8,8)):

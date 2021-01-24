@@ -4,6 +4,7 @@ from hyperbox import Hyperbox, BooleanHyperbox
 from zonotope import Zonotope
 from polytope import Polytope
 from l1_balls import L1Ball
+from linear_bounds import LinearBounds
 import utilities as utils 
 import gurobipy as gb
 import torch 
@@ -46,21 +47,26 @@ class AbstractParams(utils.ParameterObject):
 
 	@classmethod
 	def hyperbox_params(cls):
-		return cls(Hyperbox, None, Hyperbox, None, BooleanHyperbox, None)
+		return cls(Hyperbox, None, Hyperbox, None, Hyperbox, None)
 
-	@ classmethod
+	@classmethod
 	def basic_zono(cls):
 		return cls(Zonotope, None, Zonotope, None, BooleanHyperbox, None)
+
+	@classmethod 
+	def basic_lb(cls):
+		return cls(LinearBounds, None, LinearBounds, None, Hyperbox, None)
 	
 
 class AbstractNN2(object):
-	VALID_DOMAINS = [Hyperbox, Zonotope, Polytope]
+	VALID_DOMAINS = [Hyperbox, Zonotope, Polytope, LinearBounds]
 
 	HYPERBOX_DEFAULT = {}
 	ZONOTOPE_DEFAULT = {'relu_forward': 'deepZ',
 	 					'relu_backward': 'smooth'
 	 				   }
 	POLYTOPE_DEFAULT = {}
+	LINEAR_BOUND_DEFAULT = {}
 	""" Object that computes boundProp objects  """
 	def __init__(self, network):
 		self.network = network 
@@ -70,7 +76,8 @@ class AbstractNN2(object):
 		""" Builds default params for abstract domains """
 		return {Hyperbox: self.HYPERBOX_DEFAULT, 
 				Zonotope: self.ZONOTOPE_DEFAULT,
-				Polytope: self.POLYTOPE_DEFAULT}[abstract_domain]
+				Polytope: self.POLYTOPE_DEFAULT,
+				LinearBounds: self.LINEAR_BOUND_DEFAULT}[abstract_domain]
 
 	def get_both_bounds(self, abstract_params, input_range, backward_range):
 		""" Does the full forward/backward bound with the specified 
@@ -213,6 +220,9 @@ class BoundPropForward(object):
 			if isinstance(layer, (nn.ReLU, nn.LeakyReLU)):
 				grad_ranges.append(grad_domain.relu_grad(self.layer_ranges[i], 
 														 grad_params))
+			elif isinstance(layer, (nn.Sigmoid, nn.Tanh)):
+				grad_ranges.append(grad_domain.smooth_grad(self.layer_ranges[i], 
+														   layer))
 			else:
 				grad_ranges.append(None)
 		return grad_ranges
@@ -308,6 +318,8 @@ class TestBoundProp:
 				print("FORWARD ERRORS:", forw_errs)
 			if len(back_errs) > 0:
 				print("BACKWARD ERRORS:", back_errs)
+
+		forw_errs, back_errs
 
 
 	def check_forward_backward_idx(self, start_idx, num_points=1000, 

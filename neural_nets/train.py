@@ -327,6 +327,7 @@ class LpWeightReg(Regularizer):
 		super(LpWeightReg, self).__init__(scalar)
 
 		self.network = network
+		self.lp_str = lp
 		self.p_norm = {'l1': 1, 'l2': 2, 'linf': float('inf')}[lp]
 		self.requires_ff = False
 
@@ -342,6 +343,21 @@ class LpWeightReg(Regularizer):
 				sum_val += weight_norm(layer)
 		return self.scalar * sum_val
 
+
+class ReconstructionLoss(Regularizer):
+
+	def __init__(self, network=None, scalar=1.0):
+		super(ReconstructionLoss, self).__init__(scalar)
+		self.network = network
+		self.requires_ff = True
+
+	def forward(self, examples, labels, outputs=None):
+		if outputs is None:
+			outputs = self.network(examples)
+
+		num_examples = examples.shape[0]
+		net_loss = self.scalar * (outputs - examples.view(num_examples, -1)).norm(p=2)
+		return net_loss ** 2 / (2 * num_examples)
 
 
 

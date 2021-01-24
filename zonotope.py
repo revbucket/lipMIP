@@ -84,7 +84,10 @@ class Zonotope(Domain):
         points = self.y(rand)
 
         if tensor_or_np == 'tensor':
-            return points.data.requires_grad_(requires_grad)
+            points = points.data.requires_grad_(requires_grad)
+            if self.shape is not None:
+                points = points.view((num_points,) + self.shape)
+            return points            
         else:
             return utils.as_numpy(rand_points)
 
@@ -113,6 +116,7 @@ class Zonotope(Domain):
 
     def map_layer_backward(self, network, i, grad_bound, abstract_params=None):
         layer = network.net[-(i + 1)]
+        print("I", i, layer, grad_bound)
         forward_idx = len(network.net) - 1
         if isinstance(layer, nn.Linear):
             return self.map_linear(layer, forward=False)
@@ -163,49 +167,82 @@ class Zonotope(Domain):
         return new_zono #.pca_reduction()
 
     def map_conv2d(self, network, index, forward=True):
-        # Set shapes -- these are dependent upon direction
-        input_shape = network.get_ith_input_shape(index)
-        output_shape = network.get_ith_input_shape(index + 1)
+        layer = network[index]
+        assert isinstance(layer, nn.Conv2d)         
+        input_shape = network.shapes[index] 
+        output_shape = network.shapes[index + 1] 
+
         if not forward:
             input_shape, output_shape = output_shape, input_shape
 
-
-        conv2d = network.get_ith_hidden_unit(index)[0]
-        # Strategy to do forward pass is to map each element of generator
-        # through conv without bias (and center gets the bias)
         center = self.center.view((1,) + input_shape)
         generator = self.generator.T.view((-1,) + input_shape)
-        gen_cols = self.generator.shape[1]
-
-        if forward:
-            new_center = conv2d(center).view(-1)
-            new_generator = utils.conv2d_mod(generator, conv2d, bias=False,
-                                             abs_kernel=False)
-            new_generator = new_generator.view((gen_cols,) + (-1,)).T
-
+        gen_cols = self.generator.shape[1] 
+        if forward: 
+            new_center = layer(center).view(-1)
+            new_gen = utils.conv2d_mod(generator, layer, 
+                                       bias=False, abs_kernel=False)
+            new_gen = new_gen.view((gen_cols,) + (-1,)).T 
         else:
-            # Cheat and use torch autograd to do this for me 
             center_in = torch.zeros((1,) + output_shape, requires_grad=True)
-            center_out = (conv2d(center_in) * center).sum() 
+            center_out = (layer(center_in) * center).sum() 
             new_center = torch.autograd.grad(center_out, center_in)[0].view(-1)
 
             gen_in = torch.zeros((gen_cols,) + output_shape, 
                                  requires_grad=True)
-            gen_out = utils.conv2d_mod(gen_in, conv2d, bias=False, 
+            gen_out = utils.conv2d_mod(gen_in, layer, bias=False, 
                                        abs_kernel=False)
+            print(gen_out.shape, generator.shape)
             new_gen = torch.autograd.grad((gen_out * generator).sum(), gen_in)[0]
-            new_generator = new_gen.view((gen_cols, -1)).T
+            new_gen = new_gen.view((gen_cols, -1)).T
 
-        new_zono = Zonotope(dimension=new_center.numel(), center=new_center, 
-                            generator=new_generator, shape=output_shape)
+        new_zono = Zonotope(dimension=new_center.numel(), center=new_center,
+                            generator=new_gen, shape=output_shape)
         new_zono._set_lbs_ubs()
         return new_zono
+
+    def map_avgpool(self, network, index, forward=True):
+        layer = network[index]
+        assert isinstance(layer, nn.AvgPool2d)         
+        input_shape = network.shapes[index] 
+        output_shape = network.shapes[index + 1] 
+
+        if not forward:
+            input_shape, output_shape = output_shape, input_shape
+
+        center = self.center.view((1,) + input_shape)
+        generator = self.generator.T.view((-1,) + input_shape)
+        gen_cols = self.generator.shape[1] 
+        if forward: 
+            new_center = layer(center).view(-1)
+            new_gen = layer(generator)
+            new_gen = new_gen.view((gen_cols,) + (-1,)).T 
+        else:
+            center_in = torch.zeros((1,) + output_shape, requires_grad=True)
+            center_out = (layer(center_in) * center).sum() 
+            new_center = torch.autograd.grad(center_out, center_in)[0].view(-1)
+
+            gen_in = torch.zeros((gen_cols,) + output_shape, 
+                                 requires_grad=True)
+            gen_out = layer(gen_in)
+            new_gen = torch.autograd.grad((gen_out * generator).sum(), gen_in)[0]
+            new_gen = new_gen.view((gen_cols, -1)).T
+
+        new_zono = Zonotope(dimension=new_center.numel(), center=new_center,
+                            generator=new_gen, shape=output_shape)
+        return new_zono
+        new_zono._set_lbs_ubs()
+        return new_zono        
+
 
     def map_nonlin(self, nonlin):
         if nonlin == F.relu: 
             return self.map_relu()
         else: 
             return None # 
+
+    def map_tanh(self, transformer='deep', add_new_cols=True):
+        pass
 
 
     def map_relu(self, transformer='deep', add_new_cols=True):
@@ -251,6 +288,27 @@ class Zonotope(Domain):
                           for i in range(self.dimension)]
         return self._apply_single_outputs(single_outputs, 
                                           add_new_cols=add_new_cols)
+
+
+    def map_elementwise_mult(self, hbox, transformer='deep', add_new_cols=True):
+        """ Returns a new zonotope corresponding to an elementwise mult fxn 
+            applied to all elements in self, where the hbox is the range to 
+            multiply by
+        """
+        single_outputs = [] # (new center coordinate, mult level, none or col)
+        for i, elrange in enumerate(hbox): 
+            # Constant case 
+            if elrange[1] - elrange[0] == 0:
+                scale = elrange[0]
+                single_outputs.append(scale * self.center[i], scale, None) 
+            else:
+                max_coord = max([abs(self.ubs[i]), abs(self.lbs[i])])
+                vert_range =  max_coord * (elrange[1] - elrange[0]) / 2
+                scale = (elrange[0] + elrange[1]) / 2
+                new_col = torch.zeros_like(self.center) 
+                new_col[i] = vert_range 
+                single_outputs.append(scale * self.center[i], scale, new_col)
+        return self._apply_single_outputs(single_outputs, add_new_cols=add_new_cols)
 
 
     def map_leaky_switch(self, layer, bool_box, transformer='deep', 
@@ -332,40 +390,53 @@ class Zonotope(Domain):
     def contains(self, points):
         """ runs .contains_point(...) for every point in points """
         if points.dim() == 1:
-            return [self.contains_point(points)]
-        else:
-            return [self.contains_point(_) for _ in points]
+            points.view(1, -1)
+        return self.contains_batch(points)
 
-
-    def contains_point(self, point, indices=None):
-        """ Takes in a numpy array of length self.dimension and returns True/False
-            depending if point is contained in the zonotope.
-            We naively just solve this with a linear program 
-        ARGS:
-            point: np.array - point to check membership of 
-            indices: if not None, only looks at the subset of indices
-        RETURNS:
-            boolean
-        """
+    def contains_batch(self, points):
         eps = 1e-6
-        if indices is None:
-            indices = range(self.dimension)
         with utils.silent():
             model = gb.Model() 
         model.setParam('OutputFlag', False)
-
         gb_vars = [model.addVar(lb=-1.0, ub=1.0) 
                    for i in range(self.generator.shape[1])]
-        for i, idx in enumerate(indices):
-            model.addConstr(point[i].item() - self.center[idx].item() >= 
-                            gb.LinExpr(self.generator[idx], gb_vars) - eps)
-            model.addConstr(point[i].item() - self.center[idx].item() <=
-                            gb.LinExpr(self.generator[idx], gb_vars) + eps)            
+        var_namer = utils.build_var_namer('x')
+        x_vars = [model.addVar(lb=self.lbs[i], ub=self.ubs[i], name=var_namer(i))
+                  for i in range(self.dimension)] 
 
-        model.update()
-        model.optimize()
-        return model.Status not in [3, 4]
 
+        for i in range(self.dimension):
+            model.addConstr(x_vars[i] == 
+                            gb.LinExpr(self.generator[i], gb_vars) + self.center[i])
+        model.update() 
+
+        contain_list = []
+        for point in points:
+            for i, el in enumerate(point):
+                x_vars[i].lb = el-eps 
+                x_vars[i].ub = el + eps 
+            model.update() 
+            model.optimize() 
+            contain_list.append(model.Status not in [3,4])
+        return contain_list
+
+
+    def draw_2d_boundary(self, num_points): 
+        """ For 2d zonotopes, will draw them by rayshooting along coordinates
+        ARGS: 
+            num_points : int - number of points to check 
+        RETURNS: 
+            tensor of shape [num_points, 2] which outlines the boundary
+        """
+        range_matrix = torch.arange(num_points + 1) / float(num_points) * (2 * np.pi)
+        cos_els = range_matrix.cos() 
+        sin_els = range_matrix.sin() 
+
+        dir_matrix = torch.stack([cos_els, sin_els]).T 
+        argmaxs = (dir_matrix @ self.generator).sign()
+        points = self.y(argmaxs) 
+
+        return points.detach()
 
     def maximize_l1_norm_mip(self, verbose=False, num_threads=2):
         """ naive gurobi technique to maximize the l1 norm of this zonotope
@@ -766,6 +837,7 @@ class Zonotope(Domain):
 
 
         return (center_coord, gen_row, gen_col)
+
 
     # =======================================================
     # =           Single LEAKY SWITCH Transformer Methods     =
