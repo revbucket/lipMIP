@@ -92,6 +92,30 @@ def load_fmnist_data(train_or_val, batch_size=128, shuffle=True, use_cuda=False,
 
     return torch.utils.data.DataLoader(fmnist_dataset, **dataloader_constructor)
 
+# ===============================================================================
+# =           CIFAR10 DATA                                                      =
+# ===============================================================================
+
+
+def load_cifar10_data(train_or_val, batch_size=128, shuffle=True, use_cuda=False, 
+                      dataset_dir=DEFAULT_DATASET_DIR):
+    """ Builds the FMNIST data loader object for training/eval of FMNIST
+        Same signature as load_mnist_data (with no 'digits')
+    """
+    assert train_or_val in ['train', 'val']
+    use_cuda = torch.cuda.is_available() and use_cuda
+    dataloader_constructor = {'batch_size': batch_size, 
+                              'shuffle': shuffle, 
+                              'num_workers': 4,
+                              'pin_memory': use_cuda}
+    transform_chain = transforms.ToTensor()
+    
+    cifar10_dataset = datasets.CIFAR10(root=dataset_dir, 
+                                       train=(train_or_val == 'train'), 
+                                       download=True, transform=transform_chain)
+
+    return torch.utils.data.DataLoader(cifar10_dataset, **dataloader_constructor)
+
 
 
 # ===============================================================================
