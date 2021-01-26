@@ -96,6 +96,16 @@ class LinearBounds(Domain):
     def set_2dshape(self, shape):
         self.shape = shape 
 
+
+    def project_2d(self, dir_matrix):
+        """ Projects this object onto the 2 provided directions, 
+            can then be used to draw the shape 
+        """
+        lin = nn.Linear(self.dimension, 2, bias=False)
+        lin.weight.data = dir_matrix
+        return self.map_linear(lin)
+
+
     def draw_2d_boundary(self, num_points):
         """ For 2d sets, will draw them by rayshooting along coordinates
         ARGS: 

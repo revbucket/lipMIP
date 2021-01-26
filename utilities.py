@@ -280,6 +280,16 @@ def ia_mm(matrix, intervals, lohi_dim, matrix_or_vec='matrix'):
 	return intervals
 
 
+def random_ortho2(input_dim):
+	# Get 2 random orthogonal vectors in input_dim 
+
+	dirs = torch.randn(2, input_dim)
+	dir1 = dirs[0] / torch.norm(dirs[0])
+	dir2_unnorm = dirs[1] - (dir1 @ dirs[1]) * dir1 
+	dir2 = dir2_unnorm / torch.norm(dir2_unnorm)
+	return torch.stack([dir1, dir2])
+
+
 # =============================================================================
 # =           Image display functions                                         =
 # =============================================================================

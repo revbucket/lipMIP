@@ -100,6 +100,15 @@ class Zonotope(Domain):
         """
         return self.center + (self.generator @ y_tensor.unsqueeze(-1)).squeeze(-1)
 
+    def project_2d(self, dir_matrix):
+        """ Projects this object onto the 2 provided directions, 
+            can then be used to draw the shape 
+        """
+
+        lin = nn.Linear(self.dimension, 2, bias=False)
+        lin.weight.data = dir_matrix
+        return self.map_linear(lin)
+
 
     def map_layer_forward(self, network, i, abstract_params=None):
         layer = network.net[i]
@@ -116,14 +125,16 @@ class Zonotope(Domain):
 
     def map_layer_backward(self, network, i, grad_bound, abstract_params=None):
         layer = network.net[-(i + 1)]
-        print("I", i, layer, grad_bound)
         forward_idx = len(network.net) - 1
         if isinstance(layer, nn.Linear):
             return self.map_linear(layer, forward=False)
         elif isinstance(layer, nn.Conv2d):
             return self.map_conv2d(network, forward_idx, forward=False)
         elif isinstance(layer, nn.ReLU):
-            return self.map_switch(grad_bound, **(abstract_params or {}))
+            if isinstance(grad_bound, Hyperbox):
+                return self.map_elementwise_mult(grad_bound)
+            else:
+                return self.map_switch(grad_bound, **(abstract_params or {}))
         elif isinstance(layer, nn.LeakyReLU):
             return self.map_leaky_switch(layer, grad_bound, 
                                          **(abstract_params or {}))
@@ -242,6 +253,10 @@ class Zonotope(Domain):
             return None # 
 
     def map_tanh(self, transformer='deep', add_new_cols=True):
+        
+        pass
+
+    def map_sigmoid(self, transformer='deep', add_new_cols=True):
         pass
 
 
@@ -296,18 +311,17 @@ class Zonotope(Domain):
             multiply by
         """
         single_outputs = [] # (new center coordinate, mult level, none or col)
-        for i, elrange in enumerate(hbox): 
+        for i, (glo, ghi) in enumerate(hbox): 
             # Constant case 
-            if elrange[1] - elrange[0] == 0:
-                scale = elrange[0]
-                single_outputs.append(scale * self.center[i], scale, None) 
+            if glo - ghi == 0:
+                single_outputs.append((glo * self.center[i], glo * self.generator[i], None))
             else:
                 max_coord = max([abs(self.ubs[i]), abs(self.lbs[i])])
-                vert_range =  max_coord * (elrange[1] - elrange[0]) / 2
-                scale = (elrange[0] + elrange[1]) / 2
+                vert_range =  max_coord * (ghi - glo) / 2
+                scale = (glo + ghi) / 2
                 new_col = torch.zeros_like(self.center) 
                 new_col[i] = vert_range 
-                single_outputs.append(scale * self.center[i], scale, new_col)
+                single_outputs.append((scale * self.center[i], scale * self.generator[i], new_col))
         return self._apply_single_outputs(single_outputs, add_new_cols=add_new_cols)
 
 
@@ -421,7 +435,7 @@ class Zonotope(Domain):
         return contain_list
 
 
-    def draw_2d_boundary(self, num_points): 
+    def get_2d_boundary(self, num_points): 
         """ For 2d zonotopes, will draw them by rayshooting along coordinates
         ARGS: 
             num_points : int - number of points to check 
@@ -437,6 +451,10 @@ class Zonotope(Domain):
         points = self.y(argmaxs) 
 
         return points.detach()
+
+    def draw_2d_boundary(self, ax, num_points=1000):
+        points = self.get_2d_boundary(num_points)
+        ax.plot(*zip(*points))
 
     def maximize_l1_norm_mip(self, verbose=False, num_threads=2):
         """ naive gurobi technique to maximize the l1 norm of this zonotope

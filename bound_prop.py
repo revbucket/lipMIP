@@ -51,7 +51,7 @@ class AbstractParams(utils.ParameterObject):
 
 	@classmethod
 	def basic_zono(cls):
-		return cls(Zonotope, None, Zonotope, None, BooleanHyperbox, None)
+		return cls(Zonotope, None, Zonotope, None, Hyperbox, None)
 
 	@classmethod 
 	def basic_lb(cls):

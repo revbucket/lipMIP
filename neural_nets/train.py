@@ -597,5 +597,35 @@ class PGD(Regularizer):
 							  step_size=self.step_size, 
 							  global_lo=self.global_lo,
 							  global_hi=self.global_hi)
-		adv_logits = network(adv_examples)
+		adv_logits = self.network(adv_examples)
 		return self.scalar * nn.CrossEntropyLoss()(adv_logits, labels)
+
+
+
+class PGDEval(Regularizer):
+	def __init__(self, linf_bound, num_iter=10, step_size=0.02, 
+				 global_lo=0.0, global_hi=1.0, network=None, scalar=1.0,
+				 top1=False):
+		super(PGD, self).__init__(scalar)
+		self.linf_bound = linf_bound 
+		self.num_iter = num_iter
+		self.step_size = step_size
+		self.global_lo = global_lo
+		self.global_hi = global_hi
+		self.network = network
+
+	def forward(self, examples, labels, outputs=None):
+		adv_examples = aa.pgd(self.network, examples, labels, 
+							  self.linf_bound, num_iter=self.num_iter, 
+							  step_size=self.step_size, 
+							  global_lo=self.global_lo,
+							  global_hi=self.global_hi)
+		adv_logits = self.network(adv_examples)
+
+		if not self.top1:
+			return self.scalar * nn.CrossEntropyLoss()(adv_logits, labels)
+
+		else:
+			count_correct = adv_logits.max(1)[1] == labels
+			num_ex = labels.numel()
+			return float(count_correct) / num_ex
