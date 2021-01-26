@@ -223,9 +223,7 @@ class Hyperbox(Domain):
 
 
     def map_layer_backward(self, network, i, grad_bound, abstract_params):
-        print("BACK I", i)
         layer = network.net[-(i + 1)]
-        print("LAYER", layer)
         forward_idx = len(network.net) - i - 1
         if isinstance(layer, nn.Linear):
             return self.map_linear(layer, forward=False)
@@ -317,7 +315,7 @@ class Hyperbox(Domain):
             print("Up1", network[index + 1])
             print("Down1", network[index -1])
             aoeuoaeu
-            
+
         input_shape = network.shapes[index] 
         output_shape = network.shapes[index + 1] 
         if not forward:

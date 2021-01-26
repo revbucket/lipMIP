@@ -120,8 +120,13 @@ class Zonotope(Domain):
             return self.map_relu(**(abstract_params or {}))
         elif isinstance(layer, nn.LeakyReLU):
             return self.map_leaky_relu(layer, **(abstract_params or {}))
+        elif isinstance(layer, nn.Tanh):
+            return self.map_tanh()
+        elif isinstance(layer, nn.Sigmoid):
+            return self.map_sigmoid()
         else:
             raise NotImplementedError("unknown layer type", layer)
+
 
     def map_layer_backward(self, network, i, grad_bound, abstract_params=None):
         layer = network.net[-(i + 1)]
@@ -138,6 +143,8 @@ class Zonotope(Domain):
         elif isinstance(layer, nn.LeakyReLU):
             return self.map_leaky_switch(layer, grad_bound, 
                                          **(abstract_params or {}))
+        elif isinstance(layer, (nn.Tanh, nn.Sigmoid)):
+            return self.map_elementwise_mult(grad_bound)
         else:
             return NotImplementedError("Unknown layer type", layer)
 
@@ -253,11 +260,36 @@ class Zonotope(Domain):
             return None # 
 
     def map_tanh(self, transformer='deep', add_new_cols=True):
-        
-        pass
+        # Do some stupid nonsense and make this a box transformer
+
+        tanh_lbs = F.tanh(self.lbs)
+        tanh_ubs = F.tanh(self.ubs)
+        new_centers = (tanh_ubs + tanh_lbs) / 2.
+        new_ranges = (tanh_ubs - tanh_lbs) / 2.
+
+        new_zono = Zonotope(dimension=self.dimension,
+                            center=new_centers, 
+                            generator=torch.diag(new_ranges),
+                            lbs=tanh_lbs, 
+                            ubs=tanh_ubs,
+                            shape=self.shape)
+        return new_zono
+
 
     def map_sigmoid(self, transformer='deep', add_new_cols=True):
-        pass
+
+        sigmoid_lbs = F.sigmoid(self.lbs)
+        sigmoid_ubs = F.sigmoid(self.ubs)
+        new_centers = (sigmoid_ubs + sigmoid_lbs) / 2.
+        new_ranges = (sigmoid_ubs - sigmoid_lbs) / 2.
+
+        new_zono = Zonotope(dimension=self.dimension,
+                            center=new_centers, 
+                            generator=torch.diag(new_ranges),
+                            lbs=sigmoid_lbs, 
+                            ubs=sigmoid_ubs,
+                            shape=self.shape)
+        return new_zono
 
 
     def map_relu(self, transformer='deep', add_new_cols=True):

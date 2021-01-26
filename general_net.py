@@ -61,7 +61,7 @@ class GenNet(nn.Module):
                 string_sub[_type] = c
         string_seq = ''.join([string_sub[module.__class__] 
                               for module in self.net])
-        rematch = re.compile(r'^(LR(P)?)+L$')
+        rematch = re.compile(r'^(LR(P)?)+LR?$')
         assert rematch.match(string_seq) is not None
 
     @classmethod
