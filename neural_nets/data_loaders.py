@@ -262,7 +262,7 @@ class CircleSet:
         ax.set_xlim(self.xmin, self.xmax)
         ax.set_ylim(self.ymin, self.ymax)
 
-        for class_idx, c in enumerate('rb'):
+        for class_idx, c in enumerate('br'):
             class_x = self.X[self.Y == class_idx]
 
             ax.scatter(class_x[:,0], class_x[:,1], c=c)

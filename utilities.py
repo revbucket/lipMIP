@@ -13,6 +13,7 @@ import re
 import pickle
 import inspect 
 import glob
+import torch.nn as nn
 import os
 
 COMPLETED_JOB_DIR = os.path.join(os.path.dirname(__file__), 'jobs', 'completed')
@@ -289,6 +290,16 @@ def random_ortho2(input_dim):
 	dir2 = dir2_unnorm / torch.norm(dir2_unnorm)
 	return torch.stack([dir1, dir2])
 
+def monotone_down_zeros(f, lb, ub, num_steps=1000):
+    # Finds the zeros of a monotone decreasing function (along the interval [lb, ub])
+    for step in range(num_steps): 
+        if f((lb + ub) / 2.0) > 0:
+            lb = (lb + ub) / 2.0 
+        else:
+            ub = (lb + ub) / 2.0 
+    return (lb + ub) / 2.0
+
+
 
 # =============================================================================
 # =           Image display functions                                         =
@@ -332,6 +343,11 @@ def display_images(image_rows, figsize=(8, 8)):
 # ======================================================
 # =           Pytorch helpers                          =
 # ======================================================
+
+class NNAbs(nn.Module):
+	def forward(self, x): 
+		return torch.abs(x) 
+
 
 def tensorfy(x, dtype=torch.float32):
 	if isinstance(x, torch.Tensor):

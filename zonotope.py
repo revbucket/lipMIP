@@ -9,6 +9,7 @@ import numpy as np
 import numbers 
 import utilities as utils 
 import gurobipy as gb
+import matplotlib.pyplot as plt
 
 from hyperbox import Domain, Hyperbox, BooleanHyperbox
 
@@ -117,10 +118,14 @@ class Zonotope(Domain):
         elif isinstance(layer, nn.Conv2d):
             return self.map_conv2d(network, i, forward=True)
         elif isinstance(layer, nn.ReLU):
-            return self.map_relu(**(abstract_params or {}))
+            return self.map_relu()
         elif isinstance(layer, nn.LeakyReLU):
-            return self.map_leaky_relu(layer, **(abstract_params or {}))
+            return self.map_leaky_relu()
         elif isinstance(layer, nn.Tanh):
+            if abstract_params is not None and 'deep' in abstract_params:
+                return self.map_tanh_deepz()
+            if abstract_params is not None and 'box' in abstract_params:
+                return self.map_tanh_box()
             return self.map_tanh()
         elif isinstance(layer, nn.Sigmoid):
             return self.map_sigmoid()
@@ -130,7 +135,7 @@ class Zonotope(Domain):
 
     def map_layer_backward(self, network, i, grad_bound, abstract_params=None):
         layer = network.net[-(i + 1)]
-        forward_idx = len(network.net) - 1
+        forward_idx = len(network.net) - 1 - i
         if isinstance(layer, nn.Linear):
             return self.map_linear(layer, forward=False)
         elif isinstance(layer, nn.Conv2d):
@@ -143,7 +148,7 @@ class Zonotope(Domain):
         elif isinstance(layer, nn.LeakyReLU):
             return self.map_leaky_switch(layer, grad_bound, 
                                          **(abstract_params or {}))
-        elif isinstance(layer, (nn.Tanh, nn.Sigmoid)):
+        elif isinstance(layer, (nn.Sigmoid, nn.Tanh)):
             return self.map_elementwise_mult(grad_bound)
         else:
             return NotImplementedError("Unknown layer type", layer)
@@ -210,7 +215,6 @@ class Zonotope(Domain):
                                  requires_grad=True)
             gen_out = utils.conv2d_mod(gen_in, layer, bias=False, 
                                        abs_kernel=False)
-            print(gen_out.shape, generator.shape)
             new_gen = torch.autograd.grad((gen_out * generator).sum(), gen_in)[0]
             new_gen = new_gen.view((gen_cols, -1)).T
 
@@ -259,6 +263,19 @@ class Zonotope(Domain):
         else: 
             return None # 
 
+    def map_tanh2(self):
+        new_trips = [self.get_tanh_hull(self.lbs[i], self.ubs[i]) 
+                     for i in range(self.dimension)]
+        offsets  = torch.tensor([_[0] for _ in new_trips])
+        row_mult = torch.tensor([_[1] for _ in new_trips])
+        new_dof  = torch.tensor([_[2] for _ in new_trips])
+        center = offsets + row_mult * self.center
+        gen = torch.cat([self.generator * row_mult.view(-1, 1), torch.diag(new_dof)], dim=1)
+        return Zonotope(dimension=self.dimension, 
+                        center=center, 
+                        generator=gen, 
+                        shape=self.shape)            
+
     def map_tanh(self, transformer='deep', add_new_cols=True):
         # Do some stupid nonsense and make this a box transformer
 
@@ -275,21 +292,86 @@ class Zonotope(Domain):
                             shape=self.shape)
         return new_zono
 
+    def map_tanh_box(self):
+        lows = torch.tanh(self.lbs)
+        his = torch.tanh(self.ubs) 
+        twocol = torch.stack([lows, his], dim=1)
+        zono = Zonotope.cast(Hyperbox.from_twocol(twocol))
+        zono.shape = self.shape 
+        return zono
 
-    def map_sigmoid(self, transformer='deep', add_new_cols=True):
 
-        sigmoid_lbs = F.sigmoid(self.lbs)
-        sigmoid_ubs = F.sigmoid(self.ubs)
-        new_centers = (sigmoid_ubs + sigmoid_lbs) / 2.
-        new_ranges = (sigmoid_ubs - sigmoid_lbs) / 2.
+    def map_tanh_deepz(self):
+        def deepz_tanh(l, u, ax=None):
+            dsig = lambda x: 1- torch.tanh(x)**2
+            slope = torch.min(dsig(l), dsig(u))
+            mu1 = 0.5* (torch.tanh(u) + torch.tanh(l) - slope * (u + l))
+            mu2 = 0.5 * (torch.tanh(u) - torch.tanh(l) - slope * (u - l))
+            
+            # Now plot the central line 
+            upline = lambda x: slope * x + mu1 + mu2
+            downline = lambda x: slope * x + mu1 - mu2
+            midline = lambda x: slope * x + mu1
+            if ax is not None:
+                ax.plot((l, u), (upline(l), upline(u)), c='r')
+                ax.plot((l, u), (downline(l), downline(u)), c='r')
+                ax.plot((l, l), (downline(l), upline(l)), c='r')
+                ax.plot((u, u), (downline(u), upline(u)), c='r')
+            return mu1, slope, mu2
+        trips = [deepz_tanh(self.lbs[i], self.ubs[i]) for i in range(self.dimension)]
+        mu1s = torch.tensor([_[0] for _ in trips])
+        mu2s = torch.tensor([_[2] for _ in trips])
+        slopes = torch.tensor([_[1] for _ in trips])
+        deep_gen = torch.cat([self.generator * slopes.view(-1, 1), torch.diag(mu2s)], dim=1)
+        new_centers = mu1s + slopes * self.center 
+        return Zonotope(dimension=self.dimension, 
+                        center=new_centers,
+                        generator=deep_gen, 
+                        shape=self.shape)
 
-        new_zono = Zonotope(dimension=self.dimension,
-                            center=new_centers, 
-                            generator=torch.diag(new_ranges),
-                            lbs=sigmoid_lbs, 
-                            ubs=sigmoid_ubs,
-                            shape=self.shape)
-        return new_zono
+
+
+    def map_sigmoid(self):
+        new_trips = [self.get_sigmoid_hull(self.lbs[i], self.ubs[i]) 
+                     for i in range(self.dimension)]
+        offsets  = torch.tensor([_[0] for _ in new_trips])
+        row_mult = torch.tensor([_[1] for _ in new_trips])
+        new_dof  = torch.tensor([_[2] for _ in new_trips])
+        center = offsets + row_mult * self.center
+        gen = torch.cat([self.generator * row_mult.view(-1, 1), torch.diag(new_dof)], dim=1)
+        return Zonotope(dimension=self.dimension, 
+                        center=center, 
+                        generator=gen, 
+                        shape=self.shape)
+
+    def map_sigmoid_deepz(self):
+        def deepz_sigmoid(l, u, ax=None):
+            dsig = lambda x: torch.sigmoid(x) * (1 - torch.sigmoid(x))
+            slope = torch.min(dsig(l), dsig(u))
+            mu1 = 0.5* (torch.sigmoid(u) + torch.sigmoid(l) - slope * (u + l))
+            mu2 = 0.5 * (torch.sigmoid(u) - torch.sigmoid(l) - slope * (u - l))
+            
+            # Now plot the central line 
+            upline = lambda x: slope * x + mu1 + mu2
+            downline = lambda x: slope * x + mu1 - mu2
+            midline = lambda x: slope * x + mu1
+            if ax is not None:
+                ax.plot((l, u), (upline(l), upline(u)), c='r')
+                ax.plot((l, u), (downline(l), downline(u)), c='r')
+                ax.plot((l, l), (downline(l), upline(l)), c='r')
+                ax.plot((u, u), (downline(u), upline(u)), c='r')
+            return mu1, slope, mu2
+        trips = [deepz_sigmoid(self.lbs[i], self.ubs[i]) for i in range(self.dimension)]
+        mu1s = torch.tensor([_[0] for _ in trips])
+        mu2s = torch.tensor([_[2] for _ in trips])
+        slopes = torch.tensor([_[1] for _ in trips])
+        deep_gen = torch.cat([self.generator * slopes.view(-1, 1), torch.diag(mu2s)], dim=1)
+        new_centers = mu1s + slopes * self.center 
+        return Zonotope(dimension=self.dimension, 
+                        center=new_centers,
+                        generator=deep_gen, 
+                        shape=self.shape)
+
 
 
     def map_relu(self, transformer='deep', add_new_cols=True):
@@ -367,6 +449,115 @@ class Zonotope(Domain):
                           for i in range(self.dimension)]
         return self._apply_single_outputs(single_outputs, 
                                           add_new_cols=add_new_cols)
+
+
+    def map_abs(self):
+        """ Returns a new zonotope that maps all elements through the absolute 
+            value operator 
+
+            If l_i > 0, can leave as is 
+            If u_i < 0, can negate everything 
+            O.w., multiply each row by (u+l)/(u-l) and replace c with the right value 
+        """
+        new_center = self.center.clone() 
+        new_generator = self.generator.clone() 
+
+        # Handle u_i <0 case 
+        neg_idxs = self.ubs <= 0 
+        new_center[neg_idxs] *=-1 
+        new_generator[neg_idxs, :] *= -1 
+
+        # Handle uncertain cases 
+        unc = (self.ubs * self.lbs < 0)
+        if unc.sum() > 0:
+            sum_unc = self.ubs[unc] + self.lbs[unc]
+            diff_unc = self.ubs[unc] - self.lbs[unc]
+
+            # Slope is sum/diff 
+            # Radius to be added is (u * (1 - slope) / 2)
+            # New center is (radius + (sum/2) * slope)
+
+            slope = sum_unc / diff_unc 
+            new_rad = self.ubs[unc] * (1 - slope) / 2
+            new_center_coords = new_rad + sum_unc * slope / 2
+
+
+            # Modify center/generator
+            new_generator[unc, :] *= slope.view(-1, 1)
+            new_center[unc] = new_center_coords
+
+            # Make new cols and append 
+            new_cols = torch.zeros(self.dimension, unc.sum().item()) 
+            new_cols[unc, :] = new_rad.diag()
+            new_generator = torch.cat([new_generator, new_cols], dim=1)
+
+
+        new_zono = Zonotope(dimension=self.dimension, 
+                            center=new_center,
+                            generator=new_generator, 
+                            shape=self.shape)
+        return new_zono
+
+
+    def map_relu_efficient(self, layer):
+        new_center = self.center.clone() 
+        new_generator = self.generator.clone() 
+
+        # Handle negative case
+        neg_idxs = self.ubs <= 0
+        new_center[neg_idxs] = 0.
+        new_generator[neg_idxs,:] = 0.
+
+        # Handle uncertain case 
+        unc = (self.ubs * self.lbs) < 0 
+        if unc.sum() > 0:
+            sum_unc = self.ubs[unc] + self.lbs[unc]         
+            diff_unc = self.ubs[unc] - self.lbs[unc] 
+            prod_unc = self.ubs[unc] * self.lbs[unc]
+            slope = self.ubs[unc] / diff_unc 
+
+            new_rad = -prod_unc / (2 * diff_unc)
+            new_generator[unc, :] *= slope.view(-1, 1)
+            new_center_coords = self.ubs[unc] * slope / 2
+            new_center_coords = new_rad + (slope * self.center[unc]) #new_rad + sum_unc * slope / 2
+            new_center[unc] = new_center_coords
+            new_cols = torch.zeros(self.dimension, unc.sum().item())
+            new_cols[unc,:] = new_rad.diag() 
+            new_generator = torch.cat([new_generator, new_cols], dim=1)
+
+        new_zono = Zonotope(dimension=self.dimension, 
+                            center=new_center, 
+                            generator=new_generator,
+                            shape=self.shape) 
+        return new_zono
+
+    def map_elementwise_mult_efficient(self, hbox):
+        new_center = self.center.clone() 
+        new_generator = self.generator.clone() 
+        """ 
+        How many cases? 
+        glo = ghi
+        """
+        const_idxs = (hbox.radius == 0)
+        new_center[const_idxs] *= hbox.center[const_idxs]
+        new_generator[const_idxs, :] *= hbox.center[const_idxs].view(-1, 1)
+
+        var_idxs = (hbox.radius != 0)
+        if var_idxs.sum().item() > 0:
+            max_coords = torch.max(abs(self.ubs[var_idxs]), abs(self.lbs[var_idxs]))
+            vert_range = max_coords * (hbox.box_hi[var_idxs] - hbox.box_low[var_idxs]) / 2 
+            scale = hbox.center[var_idxs]
+            new_center[var_idxs] = self.center[var_idxs] * scale
+            new_cols = torch.zeros(self.dimension, var_idxs.sum().item())
+            new_cols[var_idxs,:] = vert_range.diag() 
+            new_generator[var_idxs, :] *= scale
+            new_generator = torch.cat([new_generator, new_cols], dim=1)
+
+        new_zono = Zonotope(dimension=self.dimension, 
+                            center=new_center, 
+                            generator=new_generator,
+                            shape=self.shape) 
+        return new_zono
 
 
     def _apply_single_outputs(self, single_outputs, add_new_cols=True):
@@ -484,17 +675,28 @@ class Zonotope(Domain):
 
         return points.detach()
 
-    def draw_2d_boundary(self, ax, num_points=1000):
+    def draw_2d_boundary(self, ax, num_points=1000, c=None):
         points = self.get_2d_boundary(num_points)
-        ax.plot(*zip(*points))
+        if c is not None:
+            ax.plot(*zip(*points), c=c)
+        else:
+            ax.plot(*zip(*points))
 
-    def maximize_l1_norm_mip(self, verbose=False, num_threads=2):
+    def maximize_l1_norm_abs(self):
+        sum_operator = nn.Linear(self.dimension, 1, bias=False)
+        sum_operator.weight.data = torch.ones_like(sum_operator.weight.data)
+        return self.map_abs().map_linear(sum_operator).ubs[0]
+
+
+    def maximize_l1_norm_mip(self, verbose=False, num_threads=2, time_limit=None):
         """ naive gurobi technique to maximize the l1 norm of this zonotope
         RETURNS:
             opt_val - float, optimal objective value
          """
         model = self._build_l1_mip_model(verbose=verbose, 
                                          num_threads=num_threads)
+        if time_limit is not None:
+            model.setParam('TimeLimit', time_limit)
         model.optimize()
         return model.ObjBound
 
@@ -509,6 +711,9 @@ class Zonotope(Domain):
         model.update()
         model.optimize()
         return model.ObjBound
+
+    def maximize_l1_norm_coord(self):
+        return torch.max(self.lbs.abs(), self.ubs.abs()).sum()
 
     def _build_l1_mip_model(self, verbose=False, num_threads=2):
         with utils.silent():
@@ -960,3 +1165,213 @@ class Zonotope(Domain):
 
 
         return (center_coord, gen_row, gen_col)
+
+    # ===============================================================
+    # =           Sigmoid mapping methods                           =
+    # ===============================================================
+    def secant_sigmoid_grad(self, x0):
+        def grad_fxn(x): 
+            return (x - x0) * torch.sigmoid(x) * (1 - torch.sigmoid(x)) -\
+                    (torch.sigmoid(x) - torch.sigmoid(x0))
+        return grad_fxn
+
+
+    def get_sigmoid_hull(self, l, u, plot=False):
+        # Cleaning up... 
+
+        # First step is to generate the convex hull... 
+        if l > 0: 
+            # If always positive, then lower hull is always a line
+            offset, slope, dof = self.sigmoid_lower_line(l, u)
+        elif u < 0: 
+            # If always negative, then upper hull is always a line 
+            offset, slope, dof = self.sigmoid_upper_line(l, u) 
+        else:
+            # Otherwise, we may have to compute some things... 
+            # First consider the points where upper and lower lines happen 
+            upline_secant = self.secant_sigmoid_grad(l)
+            downline_secant= self.secant_sigmoid_grad(u)
+            ut = utils.monotone_down_zeros(upline_secant, torch.tensor(0.), u * 2)
+            lt = utils.monotone_down_zeros(downline_secant, l * 2, torch.tensor(0.))
+            if lt < l:
+                offset, slope, dof = self.sigmoid_lower_line(l, u)
+            elif ut > u: 
+                offset, slope, dof = self.sigmoid_upper_line(l, u)
+            else:
+                offset, slope, dof = self.sigmoid_tripart(l, u, lt, ut)
+
+        if plot:
+            # First plot the sigmoid 
+            fig, ax = plt.subplots(figsize=(8,8))
+
+            xs = torch.arange(1001) / 1000.0 * (u - l) + l
+            ax.plot(xs.detach(), torch.sigmoid(xs).detach(), c='b')
+            upper_line = lambda x: slope * x + offset + dof 
+            lower_line = lambda x: slope * x + offset - dof 
+            ax.plot([l, u], [upper_line(l), upper_line(u)], c='g')
+            ax.plot([l, u], [lower_line(l), lower_line(u)], c='g')
+            ax.plot([l, l], [lower_line(l), upper_line(l)], c='g')
+            ax.plot([u, u], [lower_line(u), upper_line(u)], c='g')
+            return ax, (offset, slope, dof) 
+
+        return (offset, slope, dof)
+
+        
+    def sigmoid_lower_line(self, l, u):
+        # When we know the lower hull is a line...
+        slope = (torch.sigmoid(u) - torch.sigmoid(l)) / (u - l)
+        secline = lambda x: torch.sigmoid(l) + slope * (x  -l)
+        xstar = torch.logit((0.5 + torch.sqrt(1 - 4 * slope) / 2))
+        altitude = torch.sigmoid(xstar) - secline(xstar) 
+        offset = (secline(xstar) + torch.sigmoid(xstar)) / 2 - slope * xstar 
+        return (offset, slope, altitude/2)
+
+        
+    def sigmoid_upper_line(self, l, u):
+        # When we know the upper hull is a line... 
+        # When the upper hull is a line 
+        # sigma'(x) = sigma(x)(1-sigma(x)) = (sigma(u)-sigma(l)) / (u-l)
+        slope = (torch.sigmoid(u) - torch.sigmoid(l)) / (u - l)
+        secline = lambda x: torch.sigmoid(l) + slope * (x  -l)
+        xstar = torch.logit((0.5 - torch.sqrt(1 - 4 * slope) / 2))
+        altitude = secline(xstar) - torch.sigmoid(xstar)
+        
+        offset = (secline(xstar) + torch.sigmoid(xstar)) / 2 - slope * xstar 
+        return (offset, slope, altitude/2)
+
+    def sigmoid_tripart(self, l, u, lt, ut):
+        # Altitude is one of the three ranges 
+        upslope = (torch.sigmoid(ut) - torch.sigmoid(l)) / (ut - l)
+        upline = lambda x: torch.sigmoid(l) + upslope * (x - l)# line connecting (l, sigma(l)), and (ut, sigma(ut))
+        uprange = upline(lt) - torch.sigmoid(lt) 
+        
+        downslope = (torch.sigmoid(lt) - torch.sigmoid(u)) /(lt - u) 
+        downline = lambda x: torch.sigmoid(u) + downslope * (x - u)
+        downrange = torch.sigmoid(ut) - downline(ut)
+
+        # And then get altitude of each of three points 
+        # For [l, lt] does there exist a point with sigma'(x) = upslope 
+        lowmax = torch.logit((1 - torch.sqrt(1 - 4 * upslope)) / 2.0)
+        himax = torch.logit((1 + torch.sqrt(1 - 4 * downslope))/ 2.0)
+        # Now get max altitude amongst these three parts: 
+        
+        lowmax = torch.min(lowmax, lt)
+        low_alt = upline(lowmax) - torch.sigmoid(lowmax)
+        
+        himax = torch.max(himax, ut) 
+        hi_alt = torch.sigmoid(himax) - downline(himax)    
+        if low_alt > hi_alt: 
+            xstar = lowmax 
+            slope = upslope 
+            line = upline 
+            altitude = low_alt
+        else:
+            xstar = himax 
+            slope =downslope 
+            line = downline 
+            altitude = hi_alt
+            
+        offset = (line(xstar) + torch.sigmoid(xstar)) /2 - slope * xstar
+        return (offset, slope, altitude/2)
+
+    # =============================================
+    # =           Tanh mapping methods            =
+    # =============================================
+
+    def secant_tanh_grad(self, x0):
+        def grad_fxn(x): 
+            return (x - x0) * (1 - torch.tanh(x) **2) - (torch.tanh(x) - torch.tanh(x0))
+        return grad_fxn
+
+    def get_tanh_hull(self, l, u, plot=False):
+
+        if l > 0: 
+            offset, slope, dof = self.tanh_lower_line(l, u) 
+        elif u < 0: 
+            offset, slope, dof = self.tanh_upper_line(l, u) 
+        else:
+            # Otherwise, we may have to compute some things... 
+            # First consider the points where upper and lower lines happen 
+        
+            upline_secant = self.secant_tanh_grad(l)
+            downline_secant= self.secant_tanh_grad(u)
+            ut = utils.monotone_down_zeros(upline_secant, torch.tensor(0.), u * 2)
+            lt = utils.monotone_down_zeros(downline_secant, l * 2, torch.tensor(0.))
+        
+            if lt < l:
+                offset, slope, dof = self.tanh_lower_line(l, u)
+            elif ut > u: 
+                offset, slope, dof = self.tanh_upper_line(l, u)
+            else:
+                offset, slope, dof = self.tanh_tripart(l, u, lt, ut)
+        if plot: 
+            fig, ax = plt.subplots(figsize=(8,8))
+
+            xrange = torch.arange(1001) / 1000. * (u - l) + l 
+            ax.plot(xrange, torch.tanh(xrange), c='b')
+            upper_line = lambda x: slope * x + offset + dof 
+            lower_line = lambda x: slope * x + offset - dof 
+            ax.plot([l, u], [upper_line(l), upper_line(u)], c='g')
+            ax.plot([l, u], [lower_line(l), lower_line(u)], c='g')
+            ax.plot([l, l], [lower_line(l), upper_line(l)], c='g')
+            ax.plot([u, u], [lower_line(u), upper_line(u)], c='g')
+            return ax
+        return (offset, slope, dof)
+        
+            
+    def tanh_lower_line(self, l, u):
+        # When we know the lower hull is a line...
+        slope = (torch.tanh(u) - torch.tanh(l)) / (u - l)
+        secline = lambda x: torch.tanh(l) + slope * (x  -l)
+        
+        xstar = torch.atanh(torch.sqrt(1 - slope))
+        altitude = torch.tanh(xstar) - secline(xstar) 
+        offset = (secline(xstar) + torch.tanh(xstar))/2 - slope * xstar 
+        return (offset, slope, altitude/2)
+
+    def tanh_upper_line(self, l, u): 
+        slope = (torch.tanh(u) - torch.tanh(l)) / (u - l)
+        secline = lambda x: torch.tanh(l) + slope * (x  -l)
+        
+        xstar = torch.atanh(-torch.sqrt(1 - slope))
+        altitude = secline(xstar) - torch.tanh(xstar)
+        offset = (secline(xstar) + torch.tanh(xstar))/2 - slope * xstar 
+        return (offset, slope, altitude/2)
+
+
+
+    def tanh_tripart(self, l, u, lt, ut):
+        # Altitude is one of the three ranges 
+        upslope = (torch.tanh(ut) - torch.tanh(l)) / (ut - l)
+        upline = lambda x: torch.tanh(l) + upslope * (x - l)# line connecting (l, sigma(l)), and (ut, sigma(ut))
+        uprange = torch.tanh(lt) - upline(lt)
+        
+        downslope = (torch.tanh(lt) - torch.tanh(u)) /(lt - u) 
+        downline = lambda x: torch.tanh(u) + downslope * (x - u)
+        downrange = downline(ut) - torch.tanh(ut)
+
+        # And then get altitude of each of three points 
+        # For [l, lt] does there exist a point with sigma'(x) = upslope 
+        lowmax = torch.atanh(-torch.sqrt(1 - upslope))
+        himax = torch.atanh(torch.sqrt(1 - downslope))
+        
+
+        # Now get max altitude amongst these three parts: 
+        lowmax = torch.min(lowmax, lt)
+        low_alt = upline(lowmax) - torch.tanh(lowmax)
+        
+        himax = torch.max(himax, ut) 
+        hi_alt = torch.tanh(himax) - downline(himax) 
+        if low_alt > hi_alt: 
+            xstar = lowmax 
+            slope = upslope 
+            line = upline 
+            altitude = low_alt
+        else:
+            xstar = himax 
+            slope =downslope 
+            line = downline 
+            altitude = hi_alt
+            
+        offset = (line(xstar) + torch.tanh(xstar)) /2 - slope * xstar
+        return (offset, slope, altitude/2.0)

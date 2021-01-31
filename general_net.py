@@ -22,7 +22,7 @@ class GenNet(nn.Module):
     """ 
     SUPPORTED_LINS = [nn.Linear, nn.Conv2d] # L
     SUPPORTED_NONLINS = [nn.ReLU, nn.LeakyReLU, nn.Sigmoid, nn.Tanh] # R
-    SUPPORTED_POOLS = [nn.MaxPool2d, nn.AvgPool2d] # P
+    SUPPORTED_POOLS = [nn.MaxPool2d, nn.AvgPool2d, nn.Flatten] # P
     def __init__(self, net, dtype=torch.float):
         """ Constructor for GenNets 
         ARGS:

@@ -7,8 +7,8 @@ import numpy as np
 import math
 from .other_methods import OtherResult 
 import utilities as utils 
-from pre_activation_bounds import PreactivationBounds
-from interval_analysis import AbstractNN
+
+import bound_prop as bp 
 
 class FastLip(OtherResult):
 
@@ -34,3 +34,20 @@ class FastLip(OtherResult):
         self.value = value
         self.compute_time = timer.stop()
         return value
+
+
+class FastLip2(OtherResult):
+    def __init__(self, network, c_vector, domain, primal_norm):
+        super(FastLip2, self).__init__(network, c_vector, domain, primal_norm)
+
+    def compute(self):
+        timer = utils.Timer() 
+        ap = bp.AbstractParams.hyperbox_params() 
+        ann = bp.AbstractNN2(self.network)
+        grad_range = ann.get_both_bounds(ap, self.domain, self.c_vector)[1].output_range
+
+        max_coords = grad_range.as_twocol().abs().max(dim=1)[0]
+        dual_norm = {'linf': 1, 'l1': np.inf, 'l2': 2}[self.primal_norm]        
+        self.value = max_coords.norm(p=dual_norm).item() 
+        self.compute_time = timer.stop() 
+        return self.value 
