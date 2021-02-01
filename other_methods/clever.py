@@ -64,6 +64,46 @@ class CLEVER(OtherResult):
         self.compute_time = timer.stop()
         return self.value
 
+class CLEVER2(OtherResult):
+    MAX_BACKPROP_SIZE = 128 
+    def __init__(self, network, c_vector, domain, primal_norm):
+        self(CLEVER2, self).__init__(network, c_vector, domain, primal_norm) 
+
+    def compute(self, num_batches=500, batch_size=1024, use_cuda=False, 
+                weibull_fit_kwargs=None):
+
+        weibull_fit_kwargs = weibull_fit_kwargs or {}
+        if use_cuda:
+            self.network.cuda() 
+        timer = utils.Timer()
+        dual = {'l1':  np.inf, 'l2': 2, 'linf': 1}[self.primal_norm]        
+        batch_maxes = []
+        for batch in range(num_batches):
+            batch_max = None
+            for subbatch_size in utils.partition(batch_size, 
+                                                 self.MAX_BACKPROP_SIZE):
+                rand_points = self.domain.random_point(num_points=subbatch_size)
+                if use_cuda:
+                    rand_points = rand_points.cuda() 
+                rand_points.requires_grad_(True)
+                output = (self.network(rand_points) @ self.c_vector).sum() 
+                grads = torch.autograd.grad(output, rand_points)[0].view(subbatch_size, -1)
+                grad_norms = grads.norm(p=dual, dim=1)
+                max_grad_norm = grad_norms.max().cpu().item()
+                if batch_max is None or batch_max < max_grad_norm:
+                    batch_max = max_grad_norm
+            batch_maxes.append(batch_max)
+        with utils.silent():
+            batch_maxes = np.array(batch_maxes)
+            weibull_fit_results = get_best_weibull_fit(batch_maxes,
+                                                       **weibull_fit_kwargs)
+
+        self.value =  -1 * weibull_fit_results[2]
+        self.compute_time = timer.stop()
+        self.network.cpu()
+        return self.value
+
+
 """ Copied Weibull fitting technique from CLEVER repo here because I don't 
     want to use multiprocessing with a Pool coming from the __main__ method.
 

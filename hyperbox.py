@@ -209,6 +209,9 @@ class Hyperbox(Domain):
             return self.map_linear(layer, forward=True)
         elif isinstance(layer, nn.Conv2d):
             return self.map_conv2d(network, i, forward=True)
+
+        elif isinstance(layer, nn.ConvTranspose2d):
+            return self.map_conv_transpose_2d(network, i, forward=True)
         elif isinstance(layer, nn.ReLU):
             return self.map_relu()
         elif isinstance(layer, nn.LeakyReLU):
@@ -229,6 +232,9 @@ class Hyperbox(Domain):
             return self.map_linear(layer, forward=False)
         elif isinstance(layer, nn.Conv2d):
             return self.map_conv2d(network, forward_idx, forward=False)
+
+        elif isinstance(layer, nn.ConvTranspose2d):
+            return self.map_conv_transpose_2d(network, forward_idx, forward=False)            
         elif isinstance(grad_bound, BooleanHyperbox):
             if isinstance(layer, nn.ReLU):
                 return self.map_switch(grad_bound)
@@ -276,7 +282,7 @@ class Hyperbox(Domain):
         return Hyperbox.from_midpoint_radii(new_midpoint, new_radii)# ._dilate()
 
 
-    def map_conv2d(self, network, index, forward=True):
+    def map_conv2d_old(self, network, index, forward=True):
         # Setup phase
         layer = network[index]
         assert isinstance(layer, nn.Conv2d)         
@@ -303,6 +309,66 @@ class Hyperbox(Domain):
                                                 shape=output_shape)
 
         return hbox_out
+
+
+    def map_conv2d(self, network, index, forward=True):
+        # Setup phase
+        layer = network[index]
+        assert isinstance(layer, nn.Conv2d)         
+        input_shape = network.shapes[index] 
+        output_shape = network.shapes[index + 1] 
+        if not forward:
+            input_shape, output_shape = output_shape, input_shape
+        midpoint = self.center.view((1,) + input_shape)
+        radii = self.radius.view((1,) + input_shape)
+
+        if forward:
+            new_midpoint = layer(midpoint).view(-1)
+            new_radii = utils.conv2d_mod(radii, layer, bias=False, 
+                                         abs_kernel=True).view(-1) 
+        else:
+            new_layer = nn.ConvTranspose2d(layer.out_channels, layer.in_channels, 
+                                           kernel_size=layer.kernel_size, 
+                                           stride=layer.stride)
+            new_layer.weight.data = layer.weight.data 
+            new_layer.bias.data = torch.zeros_like(new_layer.bias.data)
+            new_midpoint = new_layer(midpoint).view(-1)
+            new_radii = utils.conv_transpose_2d_mod(radii, new_layer, bias=False, 
+                                                    abs_kernel=True).view(-1) 
+
+        hbox_out = Hyperbox.from_midpoint_radii(new_midpoint, new_radii, 
+                                                shape=output_shape)
+
+        return hbox_out
+
+
+    def map_conv_transpose_2d(self, network, index, forward=True):
+        layer = network[index] 
+        assert isinstance(layer, nn.ConvTranspose2d)
+        input_shape = network.shapes[index] 
+        output_shape = network.shapes[index + 1] 
+        if not forward:
+            input_shape, output_shape = output_shape, input_shape
+        midpoint = self.center.view((1,) + input_shape)
+        radii = self.radius.view((1,) + input_shape)
+
+        if forward:
+            new_midpoint = layer(midpoint).view(-1)
+            new_radii = utils.conv_transpose_2d_mod(radii, layer, bias=False, 
+                                                    abs_kernel=True).view(-1) 
+        else:
+            new_layer = nn.Conv2d(layer.out_channels, layer.in_channels, 
+                                  kernel_size=layer.kernel_size, 
+                                  stride=layer.stride,)
+            new_layer.weight.data = layer.weight.data 
+            new_layer.bias.data = torch.zeros_like(new_layer.bias.data)
+            new_midpoint = new_layer(midpoint).view(-1)
+            new_radii = utils.conv2d_mod(radii, new_layer, bias=False, 
+                                         abs_kernel=True).view(-1)
+
+        return Hyperbox.from_midpoint_radii(new_midpoint, new_radii, 
+                                            shape=output_shape)
+
 
 
     def map_avgpool(self, network, index, forward=True):

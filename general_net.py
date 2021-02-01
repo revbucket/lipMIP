@@ -20,7 +20,7 @@ class GenNet(nn.Module):
         Linear Layers: Linear, Conv2d, MaxPool2d, AvgPool2d
         Nonlinearities: ReLU, LeakyRELU
     """ 
-    SUPPORTED_LINS = [nn.Linear, nn.Conv2d] # L
+    SUPPORTED_LINS = [nn.Linear, nn.Conv2d, nn.ConvTranspose2d] # L
     SUPPORTED_NONLINS = [nn.ReLU, nn.LeakyReLU, nn.Sigmoid, nn.Tanh] # R
     SUPPORTED_POOLS = [nn.MaxPool2d, nn.AvgPool2d, nn.Flatten] # P
     def __init__(self, net, dtype=torch.float):

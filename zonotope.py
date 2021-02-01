@@ -117,6 +117,8 @@ class Zonotope(Domain):
             return self.map_linear(layer, forward=True)
         elif isinstance(layer, nn.Conv2d):
             return self.map_conv2d(network, i, forward=True)
+        elif isinstance(layer, nn.ConvTranspose2d):
+            return self.map_conv_transpose_2d(network, i, forward=True)            
         elif isinstance(layer, nn.ReLU):
             return self.map_relu()
         elif isinstance(layer, nn.LeakyReLU):
@@ -126,7 +128,7 @@ class Zonotope(Domain):
                 return self.map_tanh_deepz()
             if abstract_params is not None and 'box' in abstract_params:
                 return self.map_tanh_box()
-            return self.map_tanh()
+            return self.map_tanh2()
         elif isinstance(layer, nn.Sigmoid):
             return self.map_sigmoid()
         else:
@@ -139,7 +141,12 @@ class Zonotope(Domain):
         if isinstance(layer, nn.Linear):
             return self.map_linear(layer, forward=False)
         elif isinstance(layer, nn.Conv2d):
-            return self.map_conv2d(network, forward_idx, forward=False)
+            if abstract_params is not None and 'old' in abstract_params:
+                print("DOING OLD")
+                return self.map_conv2d_old(network, forward_idx, forward=False)
+            return self.map_conv2d_old(network, forward_idx, forward=False)                
+        elif isinstance(layer, nn.ConvTranspose2d):
+            return self.map_conv_transpose_2d(network, forward_idx, forward=False)                        
         elif isinstance(layer, nn.ReLU):
             if isinstance(grad_bound, Hyperbox):
                 return self.map_elementwise_mult(grad_bound)
@@ -189,7 +196,7 @@ class Zonotope(Domain):
         new_zono._set_lbs_ubs()
         return new_zono #.pca_reduction()
 
-    def map_conv2d(self, network, index, forward=True):
+    def map_conv2d_old(self, network, index, forward=True):
         layer = network[index]
         assert isinstance(layer, nn.Conv2d)         
         input_shape = network.shapes[index] 
@@ -222,6 +229,71 @@ class Zonotope(Domain):
                             generator=new_gen, shape=output_shape)
         new_zono._set_lbs_ubs()
         return new_zono
+
+    def map_conv2d(self, network, index, forward=True):
+        layer = network[index]
+        assert isinstance(layer, nn.Conv2d)         
+        input_shape = network.shapes[index] 
+        output_shape = network.shapes[index + 1] 
+
+        if not forward:
+            input_shape, output_shape = output_shape, input_shape
+
+        center = self.center.view((1,) + input_shape)
+        generator = self.generator.T.view((-1,) + input_shape)
+        gen_cols = self.generator.shape[1] 
+        if forward: 
+            new_center = layer(center).view(-1)
+            new_gen = utils.conv2d_mod(generator, layer, 
+                                       bias=False, abs_kernel=False)
+            new_gen = new_gen.view((gen_cols,) + (-1,)).T 
+        else:
+            new_layer = nn.ConvTranspose2d(layer.out_channels, layer.in_channels, 
+                                           kernel_size=layer.kernel_size, 
+                                           stride=layer.stride)
+            new_layer.weight.data = layer.weight.data 
+            new_layer.bias.data = torch.zeros_like(new_layer.bias.data) 
+            new_center = new_layer(center).view(-1) 
+            new_gen = utils.conv_transpose_2d_mod(generator, new_layer, bias=False, 
+                                                  abs_kernel=False)
+            new_gen = new_gen.view((gen_cols, -1)).T
+
+        new_zono = Zonotope(dimension=new_center.numel(), center=new_center,
+                            generator=new_gen, shape=output_shape)
+        return new_zono
+
+
+    def map_conv_transpose_2d(network, index, forward=True):
+        layer = network[index]
+        assert isinstance(layer, nn.ConvTranspose2d)         
+        input_shape = network.shapes[index] 
+        output_shape = network.shapes[index + 1] 
+
+        if not forward:
+            input_shape, output_shape = output_shape, input_shape
+
+        center = self.center.view((1,) + input_shape)
+        generator = self.generator.T.view((-1,) + input_shape)
+        gen_cols = self.generator.shape[1] 
+        if forward: 
+            new_center = layer(center).view(-1)
+            new_gen = utils.conv_transpose_2d_mod(generator, layer, 
+                                       bias=False, abs_kernel=False)
+            new_gen = new_gen.view((gen_cols,) + (-1,)).T 
+        else:
+            new_layer = nn.Conv2d(layer.out_channels, layer.in_channels, 
+                                  kernel_size=layer.kernel_size, 
+                                  stride=layer.stride,)
+            new_layer.weight.data = layer.weight.data 
+            new_layer.bias.data = torch.zeros_like(new_layer.bias.data)            
+            new_center = new_layer(center).view(-1) 
+            new_gen = utils.conv2d_mod(generator, new_layer, bias=False, 
+                                       abs_kernel=False)
+            new_gen = new_gen.view((gen_cols,) + (-1,)).T 
+
+        return Zonotope(dimension=new_center.numel(), center=new_center, 
+                        generator=new_gen, shape=output_shape)
+
 
     def map_avgpool(self, network, index, forward=True):
         layer = network[index]

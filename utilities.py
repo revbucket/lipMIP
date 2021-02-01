@@ -290,13 +290,16 @@ def random_ortho2(input_dim):
 	dir2 = dir2_unnorm / torch.norm(dir2_unnorm)
 	return torch.stack([dir1, dir2])
 
-def monotone_down_zeros(f, lb, ub, num_steps=1000):
+def monotone_down_zeros(f, lb, ub, num_steps=100, tol=1e-8):
     # Finds the zeros of a monotone decreasing function (along the interval [lb, ub])
     for step in range(num_steps): 
         if f((lb + ub) / 2.0) > 0:
             lb = (lb + ub) / 2.0 
         else:
             ub = (lb + ub) / 2.0 
+        if ub - lb < tol:
+        	return (lb + ub) / 2.0
+
     return (lb + ub) / 2.0
 
 
@@ -449,6 +452,31 @@ def conv2d_mod(x, conv2d, bias=True, abs_kernel=False):
 	return F.conv2d(x, weight=weight, bias=bias, stride=conv2d.stride,
 				    padding=conv2d.padding, dilation=conv2d.dilation,
 				    groups=conv2d.groups)
+
+def conv_transpose_2d_mod(x, layer, bias=True, abs_kernel=False):
+	""" Helper method to do convolution suboperations:
+	ARGS:
+		x : tensor - input to convolutional layer
+		layer : nn.Conv2d - convolutional operator we 'modify'
+		bias: bool - true if we want to include bias, false o.w. 
+		abs_kernel : bool - true if we use the absolute value of the kernel
+	RETURNS:
+		tensor output 
+	"""
+	if bias:
+		bias = layer.bias 
+	else:
+		bias = None
+	if abs_kernel: 
+		weight = layer.weight.abs()
+	else:
+		weight = layer.weight
+
+	if x.dim() == 3:
+		x = x.unsqueeze(0)
+	return F.conv_transpose2d(x, weight=weight, bias=bias, stride=layer.stride,
+		  				    padding=layer.padding, dilation=layer.dilation,
+						    groups=layer.groups)
 
 
 
