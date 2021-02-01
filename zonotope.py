@@ -146,7 +146,7 @@ class Zonotope(Domain):
                 return self.map_conv2d_old(network, forward_idx, forward=False)
             return self.map_conv2d_old(network, forward_idx, forward=False)                
         elif isinstance(layer, nn.ConvTranspose2d):
-            return self.map_conv_transpose_2d(network, forward_idx, forward=False)                        
+            return self.map_conv_transpose_2d_old(network, forward_idx, forward=False)                        
         elif isinstance(layer, nn.ReLU):
             if isinstance(grad_bound, Hyperbox):
                 return self.map_elementwise_mult(grad_bound)
@@ -293,6 +293,39 @@ class Zonotope(Domain):
 
         return Zonotope(dimension=new_center.numel(), center=new_center, 
                         generator=new_gen, shape=output_shape)
+
+
+    def map_conv_transpose_2d_old(network, index, forward=True):
+        layer = network[index]
+        assert isinstance(layer, nn.ConvTranspose2d)         
+        input_shape = network.shapes[index] 
+        output_shape = network.shapes[index + 1] 
+
+        if not forward:
+            input_shape, output_shape = output_shape, input_shape
+
+        center = self.center.view((1,) + input_shape)
+        generator = self.generator.T.view((-1,) + input_shape)
+        gen_cols = self.generator.shape[1] 
+        if forward: 
+            new_center = layer(center).view(-1)
+            new_gen = utils.conv_transpose_2d_mod(generator, layer, 
+                                       bias=False, abs_kernel=False)
+            new_gen = new_gen.view((gen_cols,) + (-1,)).T 
+        else:
+            center_in = torch.zeros((1,) + output_shape, requires_grad=True)
+            center_out = (layer(center_in) * center).sum()
+            new_center = torch.autograd.grad(center_out, center_in)[0].view(-1) 
+            gen_in = torch.zeros((gen_cols,) + output_shape, requires_grad=True)
+            gen_out = utils.conv_transpose_2d_mod(gen_in, layer, 
+                            bias=False, abs_kernel=False)
+            new_gen = torch.autograd.grad((gen_out * generator).sum(), gen_in)[0]
+            new_gen = new_gen.view((gen_cols, -1)).T 
+
+
+        return Zonotope(dimension=new_center.numel(), center=new_center, 
+                        generator=new_gen, shape=output_shape)
+
 
 
     def map_avgpool(self, network, index, forward=True):

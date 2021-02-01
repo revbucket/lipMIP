@@ -208,7 +208,7 @@ class Hyperbox(Domain):
         if isinstance(layer, nn.Linear):
             return self.map_linear(layer, forward=True)
         elif isinstance(layer, nn.Conv2d):
-            return self.map_conv2d(network, i, forward=True)
+            return self.map_conv2d_old(network, i, forward=True)
 
         elif isinstance(layer, nn.ConvTranspose2d):
             return self.map_conv_transpose_2d(network, i, forward=True)
@@ -228,6 +228,7 @@ class Hyperbox(Domain):
     def map_layer_backward(self, network, i, grad_bound, abstract_params):
         layer = network.net[-(i + 1)]
         forward_idx = len(network.net) - i - 1
+        print("FORW", layer, forward_idx, self.shape)
         if isinstance(layer, nn.Linear):
             return self.map_linear(layer, forward=False)
         elif isinstance(layer, nn.Conv2d):
@@ -243,6 +244,7 @@ class Hyperbox(Domain):
             else:
                 pass
         elif isinstance(layer, (nn.ReLU, nn.LeakyReLU, nn.Tanh, nn.Sigmoid)):
+            print("CHECK12", forward_idx, self.shape, self.center.shape, grad_bound.center.shape)
             return self.map_elementwise_mult(grad_bound)
         elif isinstance(layer, nn.AvgPool2d):
             return self.map_avgpool(network, forward_idx, forward=False)
@@ -327,12 +329,15 @@ class Hyperbox(Domain):
             new_radii = utils.conv2d_mod(radii, layer, bias=False, 
                                          abs_kernel=True).view(-1) 
         else:
+            print("MIDPOINT", midpoint.shape)
+            print("LAYER", layer)
             new_layer = nn.ConvTranspose2d(layer.out_channels, layer.in_channels, 
                                            kernel_size=layer.kernel_size, 
                                            stride=layer.stride)
             new_layer.weight.data = layer.weight.data 
             new_layer.bias.data = torch.zeros_like(new_layer.bias.data)
             new_midpoint = new_layer(midpoint).view(-1)
+            print("\t NEW MIDPOINT", new_midpoint.shape)
             new_radii = utils.conv_transpose_2d_mod(radii, new_layer, bias=False, 
                                                     abs_kernel=True).view(-1) 
 
@@ -365,6 +370,31 @@ class Hyperbox(Domain):
             new_midpoint = new_layer(midpoint).view(-1)
             new_radii = utils.conv2d_mod(radii, new_layer, bias=False, 
                                          abs_kernel=True).view(-1)
+
+        return Hyperbox.from_midpoint_radii(new_midpoint, new_radii, 
+                                            shape=output_shape)
+
+    def map_conv_transpose_2d_old(self, network, index, forward=True):
+        layer = network[index] 
+        assert isinstance(layer, nn.ConvTranspose2d)
+        input_shape = network.shapes[index] 
+        output_shape = network.shapes[index + 1] 
+        if not forward:
+            input_shape, output_shape = output_shape, input_shape
+        midpoint = self.center.view((1,) + input_shape)
+        radii = self.radius.view((1,) + input_shape)
+
+        if forward:
+            new_midpoint = layer(midpoint).view(-1)
+            new_radii = utils.conv_transpose_2d_mod(radii, layer, bias=False, 
+                                                    abs_kernel=True).view(-1) 
+        else:
+            mid_in = torch.zeros((1,) + output_shape, requires_grad=True)
+            mid_out = (layer(mid_in) * midpoint).sum() 
+            new_midpoint = torch.autograd.grad(mid_out, mid_in)[0].view(-1) 
+            rad_in = torch.zeros((1,) + output_shape, requires_grad=True)
+            rad_out = utils.conv_transpose_2d_mod(rad_in, layer, abs_kernel=True)
+            new_radii = torch.autograd.grad((rad_out * radii).sum(), rad_in)[0].view(-1)
 
         return Hyperbox.from_midpoint_radii(new_midpoint, new_radii, 
                                             shape=output_shape)
