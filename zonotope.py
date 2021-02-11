@@ -263,7 +263,7 @@ class Zonotope(Domain):
         return new_zono
 
 
-    def map_conv_transpose_2d(network, index, forward=True):
+    def map_conv_transpose_2d(self, network, index, forward=True):
         layer = network[index]
         assert isinstance(layer, nn.ConvTranspose2d)         
         input_shape = network.shapes[index] 
@@ -295,7 +295,7 @@ class Zonotope(Domain):
                         generator=new_gen, shape=output_shape)
 
 
-    def map_conv_transpose_2d_old(network, index, forward=True):
+    def map_conv_transpose_2d_old(self, network, index, forward=True):
         layer = network[index]
         assert isinstance(layer, nn.ConvTranspose2d)         
         input_shape = network.shapes[index] 

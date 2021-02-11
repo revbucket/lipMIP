@@ -197,7 +197,7 @@ class IRIS:
         # Split by class 
         for cls_idx, c in enumerate('rgb'):
             class_x = x_coords[self.Y == cls_idx]
-            ax.scatter(class_x[:,0], class_x[:,1], c=c)
+            ax.scatter(class_x[:,0], class_x[:,1        ], c=c)
 
         return ((rd_1, rd_2), ax)
 # ===============================================================================

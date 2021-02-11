@@ -126,6 +126,18 @@ class LipMIP(utils.ParameterObject):
         if model.Status in [3, 4]:
             print("INFEASIBLE")
 
+        if model.Status in [9]:
+            print("TIME LIMIT") 
+            result = LipResult(self.network, self.c_vector, 
+                               value=model.objBound, 
+                               compute_time = timer.stop(),
+                               domain=self.domain, squire=squire, 
+                               model=model)
+            self._self_attach_result(result)
+            return result
+
+        # HANDLE TIMEOUT VALUE
+
         runtime = timer.stop()
         x_vars = squire.get_vars('x')
         value = model.ObjBound #model.getObjective().getValue()

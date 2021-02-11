@@ -85,6 +85,12 @@ class GenNet(nn.Module):
         for i, layer in enumerate(self.net):
             if isinstance(layer, nn.Linear):
                 x = x.view(-1, layer.in_features)           
+                
+            if isinstance(layer, nn.ConvTranspose2d):
+                numex = x.shape[0] 
+                pix = x.numel() / (numex * layer.in_channels)
+                hw = round(math.sqrt(pix))            
+                x = x.view(-1, layer.in_channels, hw, hw)     
             shapes.append(x.shape[1:])
             x = layer(x) 
         shapes.append(x.shape[1:])
@@ -99,6 +105,13 @@ class GenNet(nn.Module):
         for layer in self.net:
             if isinstance(layer, nn.Linear):
                 x = x.view(-1, layer.in_features)
+
+            if isinstance(layer, nn.ConvTranspose2d):
+                numex = x.shape[0] 
+                pix = x.numel() / (numex * layer.in_channels)
+                hw = round(math.sqrt(pix))            
+                x = x.view(-1, layer.in_channels, hw, hw)                
+
             x = layer(x)
         return x
 

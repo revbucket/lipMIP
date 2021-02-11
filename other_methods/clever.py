@@ -21,7 +21,7 @@ class CLEVER(OtherResult):
 
 
     def compute(self, num_batches=500, batch_size=1024, 
-                weibull_fit_kwargs=None):
+                weibull_fit_kwargs=None, nofit=False):
         """ Uses CLEVER to compute an estimate of maximum gradient.
             c.f. Algorithm 1 in the linked arxiv paper
             - takes num_batches groups of batch_size random points,

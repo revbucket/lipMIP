@@ -211,7 +211,7 @@ class Hyperbox(Domain):
             return self.map_conv2d_old(network, i, forward=True)
 
         elif isinstance(layer, nn.ConvTranspose2d):
-            return self.map_conv_transpose_2d(network, i, forward=True)
+            return self.map_conv_transpose_2d_old(network, i, forward=True)
         elif isinstance(layer, nn.ReLU):
             return self.map_relu()
         elif isinstance(layer, nn.LeakyReLU):
@@ -228,14 +228,13 @@ class Hyperbox(Domain):
     def map_layer_backward(self, network, i, grad_bound, abstract_params):
         layer = network.net[-(i + 1)]
         forward_idx = len(network.net) - i - 1
-        print("FORW", layer, forward_idx, self.shape)
         if isinstance(layer, nn.Linear):
             return self.map_linear(layer, forward=False)
         elif isinstance(layer, nn.Conv2d):
-            return self.map_conv2d(network, forward_idx, forward=False)
+            return self.map_conv2d_old(network, forward_idx, forward=False)
 
         elif isinstance(layer, nn.ConvTranspose2d):
-            return self.map_conv_transpose_2d(network, forward_idx, forward=False)            
+            return self.map_conv_transpose_2d_old(network, forward_idx, forward=False)            
         elif isinstance(grad_bound, BooleanHyperbox):
             if isinstance(layer, nn.ReLU):
                 return self.map_switch(grad_bound)
@@ -244,7 +243,6 @@ class Hyperbox(Domain):
             else:
                 pass
         elif isinstance(layer, (nn.ReLU, nn.LeakyReLU, nn.Tanh, nn.Sigmoid)):
-            print("CHECK12", forward_idx, self.shape, self.center.shape, grad_bound.center.shape)
             return self.map_elementwise_mult(grad_bound)
         elif isinstance(layer, nn.AvgPool2d):
             return self.map_avgpool(network, forward_idx, forward=False)
