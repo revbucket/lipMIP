@@ -1,10 +1,15 @@
-# LipMIP
+# LipMIP + ZLip 
 
-Mixed-integer programming formulation for evaluating local Lipschitz constants of ReLU networks. We also hope this can be used as a general-purpose repository for estimating Lipschitz constants of ReLU networks, using a medley of techniques.
+General purpose, dual githup repository for evaluating Lipschitz constants of ReLU networks. This project originally developed out of a mixed-integer programming approach for exactly computing Lipschitz constants of neural networks with ReLU nonlinearities. Much of the same machinery was repurposed for an approximate Lipschitz approximation for neural networks with a larger class of nonlinearities and larger output dimension. 
 
-Check out our paper on arXiv: [Exactly Computing the Local Lipschitz Constant of ReLU Networks](https://arxiv.org/abs/2003.01219). 
+Ultimately, this repo handles the code for the following two papers:
+-  [Exactly Computing the Local Lipschitz Constant of ReLU Networks](https://arxiv.org/abs/2003.01219). **NeurIPS'20**
+-  [Provable Lipschitz Certification for Generative Models (Arxiv Link coming soon)](https://google.com). **ICML'21**
+
 --- 
 # News
+- 05/11/2021: ZLip Paper accepted at ICML 2021.
+- 09/26/2020: LipMIP Paper accepted at NeurIPS 2020.
 - 03/04/2020: ArXiv Release and Version 0.1 deployed
 ---
 
