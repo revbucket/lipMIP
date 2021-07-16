@@ -4,7 +4,7 @@ General purpose, dual githup repository for evaluating Lipschitz constants of Re
 
 Ultimately, this repo handles the code for the following two papers:
 -  [Exactly Computing the Local Lipschitz Constant of ReLU Networks](https://arxiv.org/abs/2003.01219). **NeurIPS'20**
--  [Provable Lipschitz Certification for Generative Models (Arxiv Link coming soon)](https://arxiv.org/abs/2107.02732). **ICML'21**
+-  [Provable Lipschitz Certification for Generative Models](https://arxiv.org/abs/2107.02732). **ICML'21**
 
 --- 
 # News
