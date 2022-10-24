@@ -8,6 +8,7 @@ Ultimately, this repo handles the code for the following two papers:
 
 --- 
 # News
+- 10/24/2022: (way late) updated tutorials to include ZLip support.
 - 07/09/2021: ArXiv Release for ZLip Paper.
 - 05/11/2021: ZLip Paper accepted at ICML 2021.
 - 09/26/2020: LipMIP Paper accepted at NeurIPS 2020.
@@ -62,7 +63,7 @@ $ python3 -m ipykernel install --name lipmip
 ```
 
 ## Running the tutorials
-We have included three tutorials for getting started with this repository. The first one describes basic functionality of neural nets, datasets, and training. The second one describes basic and more advanced usage of LipMIP. The third one describes how to compare LipMIP to other leading Lipschitz estimation techniques. 
+We have included three tutorials for getting started with this repository. The first one describes basic functionality of neural nets, datasets, and training. The second one describes basic and more advanced usage of LipMIP. The third one describes how to compare LipMIP to other leading Lipschitz estimation techniques **(including my other method, ZLip)**.
 
 
 With the codebase installed, run the ipython notebooks provided in `tutorials/` directory. 
