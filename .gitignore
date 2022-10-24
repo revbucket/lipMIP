@@ -1,6 +1,7 @@
 ################### PERSONAL GITIGNORE ##################
 experimental_results/
 scratch/
+scripts/
 jobs/
 other_methods/saved_weights
 tests/*.ipynb

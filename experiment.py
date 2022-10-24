@@ -25,7 +25,7 @@ class Experiment(utils.ParameterObject):
 		return InstanceGroup(output_dict, self.constructor_kwargs, kwargs)
 
 
-	def _get_dimension(self, **kwargs):		
+	def _get_dimension(self, **kwargs):
 		if 'network' in kwargs:
 			network = kwargs['network']
 		else:
@@ -42,16 +42,16 @@ class Experiment(utils.ParameterObject):
 		return self(**kwargs).compute()
 
 
-	def do_random_evals(self, num_random_points, sample_domain, 
+	def do_random_evals(self, num_random_points, sample_domain,
 						ball_factory, **kwargs):
-		""" Will pick a num_random_points in sample_domain and 
-			use ball_factory to make a new domain over them and 
+		""" Will pick a num_random_points in sample_domain and
+			use ball_factory to make a new domain over them and
 			will evaluate at each
 		ARGS:
-			num_random_points: int - number of random points to check 
-			sample_domain: Domain - has method random_point(...) which 
-						   returns many random points 
-			ball_factory: functional that takes in a random point and 
+			num_random_points: int - number of random points to check
+			sample_domain: Domain - has method random_point(...) which
+						   returns many random points
+			ball_factory: functional that takes in a random point and
 						  outputs a Hyperbox
 			kwargs: any other kwargs to send to the factories (no domain!)
 		RETURNS:
@@ -75,8 +75,8 @@ class Experiment(utils.ParameterObject):
 
 
 	def do_large_radius_eval(self, r, **kwargs):
-		""" Does evaluation of lipschitz constant of a super-large 
-			radius 
+		""" Does evaluation of lipschitz constant of a super-large
+			radius
 		"""
 		assert 'domain' not in kwargs
 		dimension =self._get_dimension(**kwargs)
@@ -91,21 +91,21 @@ class Experiment(utils.ParameterObject):
 		return ResultList(output)
 
 
-	def do_data_evals(self, data_points, ball_factory, 
+	def do_data_evals(self, data_points, ball_factory,
 					  num_random=None, **kwargs):
-		""" Given a bunch of data points, we build balls around them 
+		""" Given a bunch of data points, we build balls around them
 			and compute lipschitz constants for all of them
 		ARGS:
-			data_points: tensor or np.ndarray - data points to compute lip for 
+			data_points: tensor or np.ndarray - data points to compute lip for
 						 (these are assumed to be unique)
 			ball_factory: LinfBallFactory object - object to generate hyperboxes
 			label: None or str - label to attach to each point to trust
-			max_lipschitz_kwargs : None or dict - kwargs to pass to 
+			max_lipschitz_kwargs : None or dict - kwargs to pass to
 								   compute_max_lipschitz fxn
-			num_random: if not None, is int - how many random points we 
+			num_random: if not None, is int - how many random points we
 						collect (randomly) from the data points
-			force_unique : bool - if True we only compute lipschitz constants 
-						   for elements that are not really really close to 
+			force_unique : bool - if True we only compute lipschitz constants
+						   for elements that are not really really close to
 						   things we've already computed.
 		RETURNS:
 			None, but appends to self.data_eval list
@@ -199,7 +199,7 @@ class Result:
 
 class ResultList:
 	def __init__(self, results):
-		self.results = results 
+		self.results = results
 
 	def get_rel_err(self, dim):
 		""" Collects the relative error of each method and reports stats"""
@@ -213,26 +213,26 @@ class ResultList:
 		for result in self.results:
 			val_dict = result.values()
 			if 'LipMIP' not in val_dict:
-				continue 
+				continue
 			right_answer = val_dict['LipMIP']
 			for k, v in val_dict.items():
 				if k not in rel_errors:
 					rel_errors[k] = []
 				rel_errors[k].append(dim_scale(k, v, dim) / right_answer)
-		return {k: (np.array(v).mean(), np.array(v).std(), len(v)) for 
+		return {k: (np.array(v).mean(), np.array(v).std(), len(v)) for
 				k,v in rel_errors.items()}
 
 	def average_stdevs(self, attr):
-		""" Collects the average and standard deviations by keys in each 
+		""" Collects the average and standard deviations by keys in each
 			input dict
-		ARGS: 
+		ARGS:
 			attr: string - must be 'value' or 'time'
 		RETURNS:
 			dict like:
-				{k: (mean for k, stdev for k, # k)} for each k in each 
+				{k: (mean for k, stdev for k, # k)} for each k in each
 				input dict
 		"""
-		getter = {'value': lambda r: r.values(), 
+		getter = {'value': lambda r: r.values(),
 				  'time':  lambda r: r.compute_times()}[attr]
 		# collect set of keys
 		key_list = set()
@@ -246,11 +246,11 @@ class ResultList:
 			for k, v in getter(result).items():
 				data_lists[k].append(v)
 
-		get_mean = lambda arr: np.array(arr).mean() 
+		get_mean = lambda arr: np.array(arr).mean()
 		get_stdev = lambda arr: np.array(arr).std()
 		get_count = lambda arr: len(arr)
 
-		return {k: (get_mean(v), get_stdev(v), get_count(v)) 
+		return {k: (get_mean(v), get_stdev(v), get_count(v))
 				for k,v in data_lists.items()}
 
 
@@ -262,9 +262,9 @@ class ResultList:
 
 class MethodNest:
 	""" Think of this as a (method, set-of-arguments).
-		We'll hand this object an Experiment Object and this will supply 
-		the 
-			-method of the Experiment object to run 
+		We'll hand this object an Experiment Object and this will supply
+		the
+			-method of the Experiment object to run
 		 	-arguments to call that method
 	"""
 	METHODS = {Experiment.do_random_evals, Experiment.do_unit_hypercube_eval,
@@ -280,7 +280,7 @@ class MethodNest:
 		""" Runs the experiment object"""
 		ARGMAPPER = {Experiment.do_random_evals: self.args_do_random_evals,
  					 Experiment.do_unit_hypercube_eval: self.args_do_unit_hypercube_eval,
-					 Experiment.do_large_radius_eval: self.args_do_large_radius_eval, 
+					 Experiment.do_large_radius_eval: self.args_do_large_radius_eval,
 					 Experiment.do_data_evals: self.args_do_data_evals}
 
 		args = ARGMAPPER[self.method]()
@@ -290,10 +290,10 @@ class MethodNest:
 
 
 	def args_do_random_evals(self):
-		""" Handles arguments for random evals. Structure of arg_bundle 
+		""" Handles arguments for random evals. Structure of arg_bundle
 			looks like:
-		{num_random_points: int for how many random points to take 
-		 sample_domain:     Hyperbox to draw random points from 
+		{num_random_points: int for how many random points to take
+		 sample_domain:     Hyperbox to draw random points from
 		 ball_factory:      object that takes in point and makes a hyperbox
 		}
 		"""
@@ -311,18 +311,18 @@ class MethodNest:
 
 
 	def args_do_data_evals(self):
-		""" Complicated arg bundles! 
-		Must have a 'data_type', 'loader_kwargs', 'ball_factory' keys 
+		""" Complicated arg bundles!
+		Must have a 'data_type', 'loader_kwargs', 'ball_factory' keys
 		But if data_type is MNIST, 'loader_kwargs' corresponds to kwargs
-		for dl.load_mnist_data. 
+		for dl.load_mnist_data.
 
-		If data_type i= 'synthetic', then we need to have a dataset parameter 
+		If data_type i= 'synthetic', then we need to have a dataset parameter
 		object in arg_bundle['params']
-		and then 'loader_kwargs' corresponds to kwargs for 
-		RandomDataset object 
+		and then 'loader_kwargs' corresponds to kwargs for
+		RandomDataset object
 		"""
 
-		# First consider the dataset: 
+		# First consider the dataset:
 		assert self.arg_bundle['data_type'] in ['MNIST', 'synthetic']
 
 		# Do MNIST data generation
@@ -333,7 +333,7 @@ class MethodNest:
 		# Do synthetic data generation
 		elif self.arg_bundle['data_type'] == 'synthetic':
 			params = self.arg_bundle['params']
-			dataset = dl.RandomDataset(params, 
+			dataset = dl.RandomDataset(params,
 								  	   **self.arg_bundle['loader_kwargs'])
 			dataset.split_train_val(1.0)
 			data = dataset.train_data[0][0]
@@ -351,29 +351,29 @@ class Job(utils.ParameterObject):
 	""" Job is an object that represents a set of experiments to be run.
 		It has the following properties:
 		- ReLuNet
-		- Which techniques to evaluate 
+		- Which techniques to evaluate
 		- Which methods to run for each
 		- A 'name'
 		And the following functions:
-		- run(...) runs all the experiments, SAFELY, and returns the answer 
-		  in a pickleable object 
-		- write(...) writes this UNEXECUTED JOB to a file 
+		- run(...) runs all the experiments, SAFELY, and returns the answer
+		  in a pickleable object
+		- write(...) writes this UNEXECUTED JOB to a file
 		- @classmethod: load from file
 	"""
 
-	def __init__(self, name, experiment, method_nests, 
+	def __init__(self, name, experiment, method_nests,
 				 save_loc=None, **extra_args):
-		""" Builds an experiment object and stores instructions on how to 
+		""" Builds an experiment object and stores instructions on how to
 			run each method:
 		ARGS:
 			name : name of this job, helpful for writing files
-			network : ReLUNet object 
-			class_list : list of lipschitz estimation classes 
+			network : ReLUNet object
+			class_list : list of lipschitz estimation classes
 			method_nests: list of MethodNest objects
-			exp_kwargs : any other kwargs to be used to build the 
+			exp_kwargs : any other kwargs to be used to build the
 						 experiment object
-		"""	
-		super(Job, self).__init__(name=name, 
+		"""
+		super(Job, self).__init__(name=name,
 								  experiment=experiment,
 								  method_nests=method_nests,
 								  save_loc=save_loc,

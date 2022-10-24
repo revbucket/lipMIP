@@ -302,12 +302,32 @@ class XEntropyReg(Regularizer):
 			outputs = self.network(examples)
 		return self.scalar * nn.CrossEntropyLoss()(outputs, labels)
 
+class MSEReg(Regularizer):
+	def __init__(self, num_classes, network=None, scalar=1.0):
+		super(MSEReg, self).__init__(scalar)
+		self.num_classes = num_classes
+		self.network = network 
+		self.requires_ff = True 
+
+
+	def __repr__(self):
+		return 'MSE: (scalar: %.02e)' % self.scalar
+
+	def forward(self, examples, labels, outputs=None):
+
+		if outputs is None:
+			outputs = self.network(examples)
+		one_hot = F.one_hot(labels).type(outputs.dtype)
+		return self.scalar * nn.MSELoss()(outputs, one_hot)
+
+
 
 class LpWeightReg(Regularizer):
 	def __init__(self, network=None, scalar=1.0, lp='l1'):
 		super(LpWeightReg, self).__init__(scalar)
 
 		self.network = network
+		self.lp_str = lp
 		self.p_norm = {'l1': 1, 'l2': 2, 'linf': float('inf')}[lp]
 		self.requires_ff = False
 
@@ -316,9 +336,28 @@ class LpWeightReg(Regularizer):
 
 	def forward(self, examples, labels, outputs=None):
 		""" Just return the l1 norm of the weight matrices """
-		l1_weight = lambda fc: fc.weight.norm(self.p_norm)
-		return self.scalar * sum(l1_weight(fc) for fc in self.network.fcs)
+		weight_norm = lambda fc: fc.weight.norm(self.p_norm)
+		sum_val = 0
+		for layer in self.network.net:
+			if hasattr(layer, 'weight'):
+				sum_val += weight_norm(layer)
+		return self.scalar * sum_val
 
+
+class ReconstructionLoss(Regularizer):
+
+	def __init__(self, network=None, scalar=1.0):
+		super(ReconstructionLoss, self).__init__(scalar)
+		self.network = network
+		self.requires_ff = True
+
+	def forward(self, examples, labels, outputs=None):
+		if outputs is None:
+			outputs = self.network(examples)
+
+		num_examples = examples.shape[0]
+		net_loss = self.scalar * (outputs - examples.view(num_examples, -1)).norm(p=2)
+		return net_loss ** 2 / (2 * num_examples)
 
 
 
@@ -558,5 +597,35 @@ class PGD(Regularizer):
 							  step_size=self.step_size, 
 							  global_lo=self.global_lo,
 							  global_hi=self.global_hi)
-		adv_logits = network(adv_examples)
+		adv_logits = self.network(adv_examples)
 		return self.scalar * nn.CrossEntropyLoss()(adv_logits, labels)
+
+
+
+class PGDEval(Regularizer):
+	def __init__(self, linf_bound, num_iter=10, step_size=0.02, 
+				 global_lo=0.0, global_hi=1.0, network=None, scalar=1.0,
+				 top1=False):
+		super(PGD, self).__init__(scalar)
+		self.linf_bound = linf_bound 
+		self.num_iter = num_iter
+		self.step_size = step_size
+		self.global_lo = global_lo
+		self.global_hi = global_hi
+		self.network = network
+
+	def forward(self, examples, labels, outputs=None):
+		adv_examples = aa.pgd(self.network, examples, labels, 
+							  self.linf_bound, num_iter=self.num_iter, 
+							  step_size=self.step_size, 
+							  global_lo=self.global_lo,
+							  global_hi=self.global_hi)
+		adv_logits = self.network(adv_examples)
+
+		if not self.top1:
+			return self.scalar * nn.CrossEntropyLoss()(adv_logits, labels)
+
+		else:
+			count_correct = adv_logits.max(1)[1] == labels
+			num_ex = labels.numel()
+			return float(count_correct) / num_ex

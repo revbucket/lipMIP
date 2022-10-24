@@ -13,6 +13,7 @@ import re
 import pickle
 import inspect 
 import glob
+import torch.nn as nn
 import os
 
 COMPLETED_JOB_DIR = os.path.join(os.path.dirname(__file__), 'jobs', 'completed')
@@ -280,6 +281,29 @@ def ia_mm(matrix, intervals, lohi_dim, matrix_or_vec='matrix'):
 	return intervals
 
 
+def random_ortho2(input_dim):
+	# Get 2 random orthogonal vectors in input_dim 
+
+	dirs = torch.randn(2, input_dim)
+	dir1 = dirs[0] / torch.norm(dirs[0])
+	dir2_unnorm = dirs[1] - (dir1 @ dirs[1]) * dir1 
+	dir2 = dir2_unnorm / torch.norm(dir2_unnorm)
+	return torch.stack([dir1, dir2])
+
+def monotone_down_zeros(f, lb, ub, num_steps=100, tol=1e-8):
+    # Finds the zeros of a monotone decreasing function (along the interval [lb, ub])
+    for step in range(num_steps): 
+        if f((lb + ub) / 2.0) > 0:
+            lb = (lb + ub) / 2.0 
+        else:
+            ub = (lb + ub) / 2.0 
+        if ub - lb < tol:
+        	return (lb + ub) / 2.0
+
+    return (lb + ub) / 2.0
+
+
+
 # =============================================================================
 # =           Image display functions                                         =
 # =============================================================================
@@ -323,6 +347,32 @@ def display_images(image_rows, figsize=(8, 8)):
 # =           Pytorch helpers                          =
 # ======================================================
 
+class NNAbs(nn.Module):
+	def forward(self, x): 
+		return torch.abs(x) 
+
+
+def tensorfy(x, dtype=torch.float32):
+	if isinstance(x, torch.Tensor):
+		return x
+	else:
+		return torch.from_numpy(x).type(dtype)
+
+
+def one_hot(labels, num_classes):
+	""" Take a minibatch of labels and makes them 1-hot encoded """
+	labels = labels.view(-1, 1)
+	one_hot_vecs = torch.zeros(labels.numel(), num_classes)
+	one_hot_vecs.scatter_(1, labels, 1)
+	labels = labels.view(-1)
+	return one_hot_vecs
+
+def one_hot_training_data(trainset, num_classes):
+	output = []
+	for data, labels in trainset:
+		output.append((data, one_hot(labels, num_classes)))
+	return output 
+
 def seq_append(seq, module):
 	""" Takes a nn.sequential and a nn.module and creates a nn.sequential
 		with the module appended to it
@@ -357,6 +407,77 @@ def cudafy(tensor_iter):
 		except AssertionError:
 			return el 
 	return [safe_cuda(_) for _ in tensor_iter]
+
+
+def conv2d_counter(x_size, conv2d):
+	""" Returns the size of the output of a convolution operator 
+	ARGS:
+		x_size : tuple(int) - tuple of input sizes (c_in x H_in x W_in)
+		conv2d : nn.Conv2D object 
+	RETURNS:
+		the shape of the output 
+	"""
+	c_in, h_in, w_in = x_size
+	c_out = conv2d.out_channels 
+	k0, k1 = conv2d.kernel_size 
+	p0, p1 = conv2d.padding 
+	s0, s1 = conv2d.stride 
+
+	h_out = (h_in + 2 * p0 - k0) // s0 + 1 # round down apparently
+	w_out = (w_in + 2 * p1 - k1) // s1 + 1
+	return (c_out, h_out, w_out)
+
+
+def conv2d_mod(x, conv2d, bias=True, abs_kernel=False):
+	""" Helper method to do convolution suboperations:
+	ARGS:
+		x : tensor - input to convolutional layer
+		conv2d : nn.Conv2d - convolutional operator we 'modify'
+		bias: bool - true if we want to include bias, false o.w. 
+		abs_kernel : bool - true if we use the absolute value of the kernel
+	RETURNS:
+		tensor output 
+	"""
+	if bias:
+		bias = conv2d.bias 
+	else:
+		bias = None
+	if abs_kernel: 
+		weight = conv2d.weight.abs()
+	else:
+		weight = conv2d.weight
+
+	if x.dim() == 3:
+		x = x.unsqueeze(0)
+	return F.conv2d(x, weight=weight, bias=bias, stride=conv2d.stride,
+				    padding=conv2d.padding, dilation=conv2d.dilation,
+				    groups=conv2d.groups)
+
+def conv_transpose_2d_mod(x, layer, bias=True, abs_kernel=False):
+	""" Helper method to do convolution suboperations:
+	ARGS:
+		x : tensor - input to convolutional layer
+		layer : nn.Conv2d - convolutional operator we 'modify'
+		bias: bool - true if we want to include bias, false o.w. 
+		abs_kernel : bool - true if we use the absolute value of the kernel
+	RETURNS:
+		tensor output 
+	"""
+	if bias:
+		bias = layer.bias 
+	else:
+		bias = None
+	if abs_kernel: 
+		weight = layer.weight.abs()
+	else:
+		weight = layer.weight
+
+	if x.dim() == 3:
+		x = x.unsqueeze(0)
+	return F.conv_transpose2d(x, weight=weight, bias=bias, stride=layer.stride,
+		  				    padding=layer.padding, dilation=layer.dilation,
+						    groups=layer.groups)
+
 
 
 # =======================================
